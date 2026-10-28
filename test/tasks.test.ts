@@ -138,6 +138,17 @@ describe("paseo-plugin-tasks", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  it("rejects invalid preset permissions without corrupting the database and recovers old rows", async () => {
+    const preset = domain.listPresets().presets[0]!;
+    const result = await runTasksCli(["preset", "update", preset.id, "--permission", "default"], store, domain);
+    expect(result.exitCode).not.toBe(0);
+    expect(domain.listPresets().presets.find((p) => p.id === preset.id)?.permissionMode).toBe(preset.permissionMode);
+    expect(() => store.tasks.updatePreset(preset.id, { permissionMode: "default" as never })).toThrow();
+    store.db.prepare("UPDATE presets SET permission_mode = ? WHERE id = ?").run("default", preset.id);
+    expect(domain.listPresets().presets.find((p) => p.id === preset.id)?.permissionMode).toBe("accept-edits");
+    store.ensureDefaultPresets();
+  });
+
   it("creates folders, projects, labels, tasks, subtasks, moves across projects with key aliases, and enforces cursor revisions", () => {
     const folder = domain.createFolder({ name: "Engineering" }).folder;
     const prod = domain.createProject({

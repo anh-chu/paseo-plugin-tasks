@@ -1,4 +1,5 @@
-import type { PaseoApi } from "@getpaseo/client";
+import type { PluginHandlerContext } from "@getpaseo/plugin/server";
+type PaseoApi = PluginHandlerContext["paseo"];
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -557,14 +558,12 @@ function mapPermissionModeToModeId(
   permissionMode: Preset["permissionMode"],
 ): string | undefined {
   const provider = providerId.toLowerCase();
-  if (permissionMode === "full") {
-    if (provider === "claude") return "bypassPermissions";
-    if (provider === "codex") return "full-access";
-    return "auto";
-  }
-  if (permissionMode === "auto") {
-    return "auto";
-  }
+  if (provider === "claude") return permissionMode === "full" ? "bypassPermissions" : "acceptEdits";
+  if (provider === "codex") return permissionMode === "full" ? "full-access" : "auto-edit";
+  if (provider === "command-code" && permissionMode === "full") return "bypass";
+  if (permissionMode === "full") throw new Error(`Full permission mode is not supported for provider "${providerId}".`);
+  // Other providers expose their own mode IDs. Let the provider choose its
+  // default instead of sending an unsupported or overly permissive mode.
   return undefined;
 }
 
@@ -1303,6 +1302,7 @@ export function createDomainHandlers(
       if (!project) throw new Error(`Project not found: ${task.projectId}`);
       const preset = store.tasks.getPreset(input.presetId);
       if (!preset) throw new Error(`Preset not found: ${input.presetId}`);
+      const modeId = mapPermissionModeToModeId(preset.providerId, preset.permissionMode);
 
       const { projects: paseoProjects } = await paseo.projects.list();
       let targetProject = project.linkedBbProjectId
@@ -1366,11 +1366,6 @@ export function createDomainHandlers(
       const providerSpec = preset.modelId.startsWith(`${preset.providerId}/`)
         ? preset.modelId
         : `${preset.providerId}/${preset.modelId}`;
-      const modeId = mapPermissionModeToModeId(
-        preset.providerId,
-        preset.permissionMode,
-      );
-
       const agent = await workspace.agents.create({
         title,
         prompt,

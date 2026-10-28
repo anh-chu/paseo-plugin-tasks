@@ -1,6 +1,6 @@
 import { delimiter, join } from "node:path";
-import type { PaseoApi } from "@getpaseo/client";
-import type { PluginServerContext } from "@getpaseo/plugin/server";
+import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
+type PaseoApi = PluginHandlerContext["paseo"];
 import {
   buildTasksInstructions,
   TASKS_SKILL_MARKER,

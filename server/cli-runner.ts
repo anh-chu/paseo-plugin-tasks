@@ -1416,6 +1416,10 @@ export async function runTasksCli(
         });
       }
       const preset = resolvePreset(domain.listPresets().presets, target);
+      const permission = getFlag(parsed, "permission");
+      if (permission !== undefined && !PRESET_PERMISSION_MODES.includes(permission as PresetPermissionMode)) {
+        throw new TasksCliError(`invalid --permission "${permission}"; expected one of ${PRESET_PERMISSION_MODES.join(", ")}`);
+      }
       const envFlag = getFlag(parsed, "environment");
       const environmentKind =
         envFlag === undefined

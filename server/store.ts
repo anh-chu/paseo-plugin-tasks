@@ -435,7 +435,9 @@ function presetFromRow(row: PresetRow): Preset {
       row.service_tier === null
         ? null
         : presetServiceTierSchema.parse(row.service_tier),
-    permissionMode: presetPermissionModeSchema.parse(row.permission_mode),
+    // Old versions allowed invalid CLI values to be saved. Fall back to the
+    // least permissive preset so one bad row cannot prevent plugin startup.
+    permissionMode: presetPermissionModeSchema.safeParse(row.permission_mode).data ?? "accept-edits",
     environmentKind: row.environment_kind,
     baseBranch: row.base_branch,
     machineId: row.machine_id,
@@ -1815,7 +1817,7 @@ export function createTasksStore(db: PluginDatabase) {
       requireNonEmpty(input.modelId, "Preset modelId"),
       requireNonEmpty(input.reasoningLevel, "Preset reasoningLevel"),
       input.serviceTier,
-      requireNonEmpty(input.permissionMode, "Preset permissionMode"),
+      presetPermissionModeSchema.parse(input.permissionMode),
       environment.environmentKind,
       environment.baseBranch,
       environment.machineId,
@@ -1883,7 +1885,7 @@ export function createTasksStore(db: PluginDatabase) {
       input.serviceTier === undefined ? current.serviceTier : input.serviceTier,
       input.permissionMode === undefined
         ? current.permissionMode
-        : requireNonEmpty(input.permissionMode, "Preset permissionMode"),
+        : presetPermissionModeSchema.parse(input.permissionMode),
       environment.environmentKind,
       environment.baseBranch,
       environment.machineId,
