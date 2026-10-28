@@ -558,8 +558,8 @@ function mapPermissionModeToModeId(
   permissionMode: Preset["permissionMode"],
 ): string | undefined {
   const provider = providerId.toLowerCase();
-  if (provider === "claude") return permissionMode === "full" ? "bypassPermissions" : "acceptEdits";
-  if (provider === "codex") return permissionMode === "full" ? "full-access" : "auto-edit";
+  if (provider === "claude") return permissionMode === "full" ? "bypassPermissions" : permissionMode === "auto" ? "auto" : "acceptEdits";
+  if (provider === "codex") return permissionMode === "full" ? "full-access" : "auto";
   if (provider === "command-code" && permissionMode === "full") return "bypass";
   if (permissionMode === "full") throw new Error(`Full permission mode is not supported for provider "${providerId}".`);
   // Other providers expose their own mode IDs. Let the provider choose its
