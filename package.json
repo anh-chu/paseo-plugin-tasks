@@ -1,6 +1,6 @@
 {
   "name": "paseo-plugin-tasks",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Paseo plugin: Linear-style task tracker with projects, folders, subtasks, comments, agent preset delegation, comment steering, and CLI/MCP report-back.",
   "keywords": [
     "paseo",
