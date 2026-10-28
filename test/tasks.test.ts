@@ -162,6 +162,48 @@ describe("paseo-plugin-tasks", () => {
     expect(createdWorkspaces).toHaveLength(1);
   });
 
+  it("connects the CLI and MCP bridge on their first delegation without a prior RPC", async () => {
+    const project = domain.createProject({ name: "Bridge", prefix: "BRG", color: "blue", linkedBbProjectId: "prj_demo123" }).project;
+    const task = domain.createTask({ projectId: project.id, title: "Delegate", status: "todo", priority: "medium" });
+    if (!task.ok) throw new Error("task creation failed");
+    const preset = domain.listPresets().presets[0]!;
+    let connected = false;
+    const bridgeDomain = createDomainHandlers(store, () => connected ? mockPaseo as never : null);
+    const ensure = vi.fn(async () => { connected = true; });
+    const bridge = await startTasksBridge(store, bridgeDomain, ensure);
+    const headers = { "content-type": "application/json", authorization: `Bearer ${bridge.token}` };
+    try {
+      const cli = await fetch(`${bridge.url}/cli`, {
+        method: "POST", headers,
+        body: JSON.stringify({ argv: ["delegate", task.task.key, "--preset", preset.id, "--json"] }),
+      }).then((response) => response.json());
+      expect(cli.exitCode).toBe(0);
+      expect(ensure).toHaveBeenCalledTimes(1);
+      connected = false;
+      const mcp = await fetch(`${bridge.url}/mcp`, {
+        method: "POST", headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "tasks_delegate", arguments: { key: task.task.key, preset: preset.id } } }),
+      }).then((response) => response.json());
+      expect(mcp.result.isError).toBe(false);
+      expect(ensure).toHaveBeenCalledTimes(2);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it("returns a failure when a bridge connection cannot be established", async () => {
+    const bridge = await startTasksBridge(store, domain, async () => { throw new Error("daemon unavailable"); });
+    const headers = { "content-type": "application/json", authorization: `Bearer ${bridge.token}` };
+    try {
+      const cli = await fetch(`${bridge.url}/cli`, { method: "POST", headers, body: JSON.stringify({ argv: ["delegate", "BRG-1"] }) }).then((r) => r.json());
+      expect(cli.exitCode).toBe(1);
+      expect(cli.stderr).toContain("daemon unavailable");
+      const mcp = await fetch(`${bridge.url}/mcp`, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "tasks_delegate", arguments: {} } }) }).then((r) => r.json());
+      expect(mcp.result.isError).toBe(true);
+      expect(mcp.result.content[0].text).toContain("daemon unavailable");
+    } finally { await bridge.close(); }
+  });
+
   it("creates folders, projects, labels, tasks, subtasks, moves across projects with key aliases, and enforces cursor revisions", () => {
     const folder = domain.createFolder({ name: "Engineering" }).folder;
     const prod = domain.createProject({

@@ -393,6 +393,12 @@ async function executeMcpToolCall(
   };
 }
 
+function needsPaseo(argv: readonly string[]): boolean {
+  const args = argv[0] === "tasks" ? argv.slice(1) : argv;
+  return ["delegate", "dispatch", "attach", "detach"].includes(args[0] ?? "") ||
+    (args[0] === "comment" && args.includes("--notify"));
+}
+
 function buildCliWrapperScript(bridgeFilePath: string): string {
   return `#!/usr/bin/env node
 import { readFileSync } from "node:fs";
@@ -497,6 +503,7 @@ rl.on("line", async (line) => {
 export async function startTasksBridge(
   store: TasksApiStore,
   domain: TasksDomain,
+  ensurePaseo?: () => Promise<void>,
 ): Promise<TasksBridgeHandle> {
   const token = randomBytes(24).toString("hex");
   const dataDir = store.dataDir;
@@ -524,8 +531,16 @@ export async function startTasksBridge(
           threadId?: string;
           projectId?: string;
         };
+        const argv = Array.isArray(body.argv) ? body.argv : [];
+        if (needsPaseo(argv)) {
+          try { await ensurePaseo?.(); }
+          catch (error) {
+            sendJson(res, 200, { exitCode: 1, stdout: "", stderr: `Cannot connect to the Paseo daemon: ${error instanceof Error ? error.message : String(error)}` });
+            return;
+          }
+        }
         const result = await runTasksCli(
-          Array.isArray(body.argv) ? body.argv : [],
+          argv,
           store,
           domain,
           {
@@ -592,6 +607,13 @@ export async function startTasksBridge(
           const toolArgs =
             (rpc.params?.arguments as Record<string, unknown> | undefined) ??
             {};
+          if (["tasks_delegate", "tasks_attach", "tasks_detach"].includes(toolName) || (toolName === "tasks_comment" && toolArgs.notify === true)) {
+            try { await ensurePaseo?.(); }
+            catch (error) {
+              sendJson(res, 200, { jsonrpc: "2.0", id: rpc.id, result: { isError: true, content: [{ type: "text", text: `Cannot connect to the Paseo daemon: ${error instanceof Error ? error.message : String(error)}` }] } });
+              return;
+            }
+          }
           const callResult = await executeMcpToolCall(
             toolName,
             toolArgs,

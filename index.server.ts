@@ -54,6 +54,7 @@ import {
 } from "./shared/contract";
 import { tasksSettings } from "./shared/settings";
 import { startTasksBridge, type TasksBridgeHandle } from "./server/bridge";
+import { connectBridgeDaemon } from "./server/daemon-connection";
 import {
   createApiStore,
   createDomainHandlers,
@@ -73,8 +74,21 @@ export default function contribute(server: PluginServerContext) {
 
   const domain = createDomainHandlers(store, () => latestPaseo);
 
+  let bridgeConnection: Awaited<ReturnType<typeof connectBridgeDaemon>> | null = null;
+  let bridgeConnecting: Promise<void> | null = null;
+  const ensureBridgePaseo = async () => {
+    if (latestPaseo) return;
+    if (!bridgeConnecting) {
+      bridgeConnecting = connectBridgeDaemon().then((connection) => {
+        bridgeConnection = connection;
+        if (!latestPaseo) latestPaseo = connection.paseo;
+      }).finally(() => { bridgeConnecting = null; });
+    }
+    await bridgeConnecting;
+  };
+
   let bridge: TasksBridgeHandle | null = null;
-  const bridgeReady = startTasksBridge(store, domain)
+  const bridgeReady = startTasksBridge(store, domain, ensureBridgePaseo)
     .then((handle) => {
       bridge = handle;
       return handle;
@@ -378,6 +392,8 @@ export default function contribute(server: PluginServerContext) {
   return async () => {
     const activeBridge = bridge ?? (await bridgeReady);
     await activeBridge?.close();
+    await bridgeConnecting?.catch(() => {});
+    await bridgeConnection?.close();
     store.db.close();
   };
 }
