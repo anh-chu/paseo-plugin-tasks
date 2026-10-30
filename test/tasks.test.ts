@@ -149,6 +149,28 @@ describe("paseo-plugin-tasks", () => {
     store.ensureDefaultPresets();
   });
 
+  it("requires fresh evidence for CLI review and completion while allowing failed checks for review", async () => {
+    const project = domain.createProject({ name: "Review", prefix: "REV", color: "blue" }).project;
+    const created = domain.createTask({ projectId: project.id, title: "Check", status: "in_progress", priority: "medium" });
+    if (!created.ok) throw new Error("task creation failed");
+    const task = created.task;
+    const attempt = (status: string) => runTasksCli(["update", task.key, "--status", status, "--json"], store, domain);
+    expect((await attempt("in_review")).exitCode).not.toBe(0);
+    expect((await attempt("done")).exitCode).not.toBe(0);
+    await domain.createComment({ taskId: task.id, body: "**Evidence for `REV-1`** — FAILED CHECK\n\n**What ran**\nA test failed.\n\n**What was not covered**\nThe integration test.", notify: false });
+    expect((await attempt("in_review")).exitCode).toBe(0);
+    expect((await attempt("done")).exitCode).not.toBe(0);
+    await domain.createComment({ taskId: task.id, body: "**Evidence for `REV-1`** — PASS\n\n**What ran**\nAll checks passed.\n\n**What was not covered**\nNothing identified.", notify: false });
+    expect((await attempt("done")).exitCode).toBe(0);
+    domain.updateTask({ taskId: task.id, status: "in_progress" });
+    expect((await attempt("in_review")).exitCode).not.toBe(0);
+    await domain.createComment({ taskId: task.id, body: "**Evidence for `REV-1`** — BLOCKED\n\n**What ran**\nNo checks could run.\n\n**What was not covered**\nWaiting for credentials.", notify: false });
+    expect((await attempt("in_review")).exitCode).toBe(0);
+    expect((await attempt("done")).exitCode).not.toBe(0);
+    await domain.createComment({ taskId: task.id, body: "**Evidence for `REV-1`** — NOTHING CHECKABLE\n\n**What ran**\nNo automated checks apply.\n\n**What was not covered**\nNo tests apply to this task.", notify: false });
+    expect((await attempt("done")).exitCode).toBe(0);
+  });
+
   it("sends command-code a supported mode and rejects unknown full-access modes before creating a workspace", async () => {
     const project = domain.createProject({ name: "Demo", prefix: "DEMO", color: "blue", linkedBbProjectId: "prj_demo123" }).project;
     const task = domain.createTask({ projectId: project.id, title: "Example", status: "todo", priority: "medium" });
@@ -405,7 +427,50 @@ describe("paseo-plugin-tasks", () => {
           },
         }),
       }).then((r) => r.json());
-      expect(mcpCall.result.isError).toBe(false);
+      // A submission with no evidence is refused, and the card does not move: review must not
+      // become a rubber stamp for a claim.
+      expect(mcpCall.result.isError).toBe(true);
+      expect(mcpCall.result.content[0].text).toContain("**Evidence for `TASKS-1`**");
+      expect(domain.getTaskByKey({ taskKey: "TASKS-1" }).task?.status).not.toBe(
+        "in_review",
+      );
+      const directDone = await fetch(`${bridge.url}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${bridge.token}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "tasks_update", arguments: { key: "TASKS-1", status: "done" } } }),
+      }).then((r) => r.json());
+      expect(directDone.result.isError).toBe(true);
+      expect(domain.getTaskByKey({ taskKey: "TASKS-1" }).task?.status).not.toBe("done");
+
+      // With an evidence block on the card, the same submission is accepted.
+      const target = domain.getTaskByKey({ taskKey: "TASKS-1" }).task;
+      expect(target).toBeDefined();
+      await domain.createComment({
+        taskId: target!.id,
+        kind: "user",
+        authorName: "gate",
+        body: "**Evidence for `TASKS-1`** — PASS WITH GAPS\n\n**What ran**\n- tests → pass\n\n**What was not covered**\n- nothing identified",
+        notify: false,
+        awaitDelivery: false,
+      });
+      const resubmit = await fetch(`${bridge.url}/mcp`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${bridge.token}`,
+          "x-paseo-agent-id": "agent-uuid-1001",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: {
+            name: "tasks_update",
+            arguments: { key: "TASKS-1", status: "in_review" },
+          },
+        }),
+      }).then((r) => r.json());
+      expect(resubmit.result.isError).toBe(false);
       expect(domain.getTaskByKey({ taskKey: "TASKS-1" }).task?.status).toBe(
         "in_review",
       );

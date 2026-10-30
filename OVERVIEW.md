@@ -13,6 +13,8 @@ Worker agents report through two channels that the plugin installs for them:
 
 Both channels talk to the running daemon over a loopback HTTP bridge. When an agent writes `::task{key="ABC-12"}` on its own line in a reply, Paseo replaces that line with a live task card that opens the task.
 
+CLI and MCP submissions to review or completion require a comment describing checks and gaps. A blocked or failed check can be submitted for review; completion requires a passing verdict or an explanation that nothing was checkable. The check validates the comment format, not the claims. A person can change the status in the app.
+
 Comment steering closes the loop the other way. Writing a comment with **Notify agent** on sends it to the agent that last replied on the task, or to the most recently attached session, as new context for the work in progress.
 
 Agent sessions are tracked through Paseo's lifecycle events. When a session starts, finishes a turn, fails, or closes, the task records the new state; a terminal state also leaves a comment on the task.

@@ -123,7 +123,7 @@ const MCP_TOOLS = [
   {
     name: "tasks_update",
     description:
-      "Update a task's workflow status, priority, title, description, or due date. Use in_review when implementation is ready for review, or done when complete.",
+      "Update a task's status or fields. Before in_review or done, comment: **Evidence for `KEY`** — VERDICT, followed by **What ran** and **What was not covered** sections with details. Verdict: PASS, PASS WITH GAPS, FAILED CHECK, NOTHING CHECKABLE, or BLOCKED. Done requires PASS, PASS WITH GAPS, or NOTHING CHECKABLE.",
     inputSchema: {
       type: "object",
       properties: {

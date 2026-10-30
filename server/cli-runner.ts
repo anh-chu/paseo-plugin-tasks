@@ -24,6 +24,7 @@ import type {
 } from "../shared/contract";
 import { attachmentDownloadUrl } from "./attachments";
 import { seedDemoData, type TasksApiStore, type TasksDomain } from "./domain";
+import { reviewEvidenceVerdict, reviewEvidenceInstructions } from "./review-evidence";
 
 export interface CliRunContext {
   cwd?: string;
@@ -1012,6 +1013,14 @@ export async function runTasksCli(
         nextLabels.delete(resolveLabel(labels, name).id);
       }
       const labelsChanged = addLabels.length > 0 || removeLabels.length > 0;
+
+      if ((status === "in_review" || status === "done") && status !== task.status &&
+          process.env.PASEO_TASKS_REQUIRE_EVIDENCE !== "0") {
+        const verdict = reviewEvidenceVerdict(store.tasks.listComments(task.id), task.key);
+        if (!verdict || (status === "done" && verdict !== "PASS" && verdict !== "PASS WITH GAPS" && verdict !== "NOTHING CHECKABLE")) {
+          throw new TasksCliError(reviewEvidenceInstructions(task.key), { code: "review_evidence_required" });
+        }
+      }
 
       const updated = domain.updateTask({
         taskId: task.id,

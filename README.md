@@ -77,6 +77,20 @@ seed-demo --yes                       Create sample folders, projects, labels, t
 
 The same operations are exposed as MCP tools: `tasks_projects`, `tasks_list`, `tasks_show`, `tasks_create`, `tasks_update`, `tasks_comment`, `tasks_delegate`, `tasks_attach`, and `tasks_detach`.
 
+CLI and MCP status changes to `in_review` or `done` require a task comment for the current work cycle:
+
+```md
+**Evidence for `ABC-12`** — PASS WITH GAPS
+
+**What ran**
+Describe checks and results, or explain why none ran.
+
+**What was not covered**
+Describe gaps or blockers, or say none.
+```
+
+Choose one verdict: `PASS`, `PASS WITH GAPS`, `FAILED CHECK`, `NOTHING CHECKABLE`, or `BLOCKED`. Any verdict can enter review; `done` requires `PASS`, `PASS WITH GAPS`, or `NOTHING CHECKABLE`. Dispatching an agent or returning the card to an active state requires a new comment. This checks the comment's format; it does not verify its claims. The app's board and task controls remain available for manual changes. To disable the CLI and MCP check, set `PASEO_TASKS_REQUIRE_EVIDENCE=0` in the daemon environment.
+
 ### Task cards in replies
 
 An agent that writes `::task{key="ABC-12"}` on its own line gets a live task card in place of that line. Clicking the card opens the task.
