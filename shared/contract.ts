@@ -174,6 +174,7 @@ export const presetSchema = z
     environmentKind: presetEnvironmentKindSchema,
     baseBranch: nullablePresetTargetSchema,
     machineId: nullablePresetTargetSchema,
+    checkIn: z.string().nullable(),
     instructions: z.string(),
     builtin: z.boolean(),
     createdAt: z.string(),
@@ -307,6 +308,7 @@ export const updatePresetInputSchema = z
     environmentKind: presetEnvironmentKindSchema.optional(),
     baseBranch: nullablePresetTargetSchema.optional(),
     machineId: nullablePresetTargetSchema.optional(),
+    checkIn: nonBlankStringSchema.nullable().optional(),
     instructions: z.string().optional(),
   })
   .strict()
@@ -321,6 +323,7 @@ export const updatePresetInputSchema = z
       input.environmentKind !== undefined ||
       input.baseBranch !== undefined ||
       input.machineId !== undefined ||
+      input.checkIn !== undefined ||
       input.instructions !== undefined,
     { message: "at least one preset field must be updated" },
   )
@@ -784,6 +787,7 @@ export const createPresetRpc = defineRpc({
       environmentKind: presetEnvironmentKindSchema.default("project-default"),
       baseBranch: nullablePresetTargetSchema.default(null),
       machineId: nullablePresetTargetSchema.default(null),
+      checkIn: nonBlankStringSchema.nullable().default(null),
       instructions: z.string().default(""),
     })
     .strict()

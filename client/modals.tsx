@@ -42,6 +42,13 @@ import {
 } from "../shared/contract";
 import { LabelPill, ProjectDot } from "./badges";
 
+const CHECK_IN_OPTIONS = [
+  [null, "Off"],
+  ["0 * * * *", "Every hour"],
+  ["0 9 * * 1-5", "Weekdays at 9:00"],
+  ["0 9 * * *", "Every day at 9:00"],
+] as const;
+
 export function NewTaskModal({
   open,
   onOpenChange,
@@ -535,6 +542,7 @@ export function ManageModal({
   const [presetEnvironment, setPresetEnvironment] =
     useState<PresetEnvironmentKind>("new-worktree");
   const [presetBaseBranch, setPresetBaseBranch] = useState("");
+  const [presetCheckIn, setPresetCheckIn] = useState<string | null>(null);
   const [presetInstructions, setPresetInstructions] = useState("");
 
   const invalidateAll = () => {
@@ -630,6 +638,7 @@ export function ManageModal({
             ? presetBaseBranch.trim()
             : null,
         machineId: null,
+        checkIn: presetCheckIn,
         instructions: presetInstructions,
       });
       setPresetName("");
@@ -1405,6 +1414,13 @@ export function ManageModal({
                     {preset.environmentKind === "new-worktree"
                       ? `worktree${preset.baseBranch ? ` (${preset.baseBranch})` : ""}`
                       : "project-default"}
+                    {preset.checkIn
+                      ? ` · check-in: ${
+                          CHECK_IN_OPTIONS.find(
+                            ([cron]) => cron === preset.checkIn,
+                          )?.[1] ?? preset.checkIn
+                        }`
+                      : ""}
                   </Text>
                   {preset.instructions ? (
                     <Text
@@ -1641,6 +1657,37 @@ export function ManageModal({
                     }}
                   />
                 ) : null}
+
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+                  {CHECK_IN_OPTIONS.map(([cron, label]) => (
+                    <Pressable
+                      key={label}
+                      accessibilityRole="button"
+                      onPress={() => setPresetCheckIn(cron)}
+                      style={{
+                        paddingHorizontal: 8,
+                        paddingVertical: 4,
+                        borderRadius: 6,
+                        backgroundColor:
+                          presetCheckIn === cron
+                            ? theme.colors.accent
+                            : theme.colors.surface2,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color:
+                            presetCheckIn === cron
+                              ? theme.colors.accentForeground
+                              : theme.colors.foreground,
+                          fontSize: 11,
+                        }}
+                      >
+                        Check-in: {label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
 
                 <TextInput
                   value={presetInstructions}

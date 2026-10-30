@@ -8,6 +8,8 @@ import { runTasksCli } from "../server/cli-runner";
 import {
   createApiStore,
   createDomainHandlers,
+  reconcileOnFirstCapture,
+  registerLifecycleHooks,
   transitionTrackedThread,
   type TasksApiStore,
   type TasksDomain,
@@ -632,6 +634,216 @@ describe("paseo-plugin-tasks", () => {
     } finally {
       await bridge.close();
     }
+  });
+
+  describe("feature lead support", () => {
+    type Handler = (event: unknown, context: unknown) => unknown;
+    const hooks = new Map<string, Handler>();
+    const fire = (name: string, event: unknown) =>
+      hooks.get(name)!(event, { paseo: mockPaseo, signal: new AbortController().signal });
+    const agentRef = (id: string) => ({ id, workspaceId: null, parentAgentId: null, provider: "codex", cwd: "/tmp", title: null });
+
+    function setupLeadAndWorker() {
+      const project = domain.createProject({ name: "Feature", prefix: "FEAT", color: "blue", linkedBbProjectId: "prj_demo123" }).project;
+      const parent = domain.createTask({ projectId: project.id, title: "Lead the feature", status: "in_progress" });
+      if (!parent.ok) throw new Error("parent not created");
+      const sub = domain.createTask({ projectId: project.id, title: "Build the API", status: "in_progress", parentTaskId: parent.task.id });
+      if (!sub.ok) throw new Error("subtask not created");
+      store.tasks.upsertTaskThread({ taskId: parent.task.id, threadId: "agent-lead", workspaceId: null, presetName: "Feature lead", title: "Lead", liveStatus: "idle" });
+      store.tasks.upsertTaskThread({ taskId: sub.task.id, threadId: "agent-worker", workspaceId: null, presetName: "Backend worker", title: "Worker", liveStatus: "idle" });
+      return { parent: parent.task, sub: sub.task };
+    }
+
+    async function systemBodies(taskId: string) {
+      return (await domain.listComments({ taskId }, null)).comments.filter((c) => c.kind === "system").map((c) => c.body);
+    }
+
+    beforeEach(() => {
+      hooks.clear();
+      registerLifecycleHooks({ on: (name: string, handler: Handler) => hooks.set(name, handler) } as never, store, () => {});
+    });
+
+    it("comments and wakes the lead when a worker stops without reporting, once per turn", async () => {
+      const { parent, sub } = setupLeadAndWorker();
+      await fire("agent.turn_started", { agent: agentRef("agent-worker"), turnId: "t1" });
+      const ended = {
+        agent: agentRef("agent-worker"),
+        turnId: "t1",
+        outcome: { kind: "completed" },
+        timeline: [
+          { type: "assistant_message", text: "Earlier note." },
+          { type: "assistant_message", text: `Should the API use REST or RPC? ${"x".repeat(400)}` },
+        ],
+      };
+      await fire("agent.turn_ended", ended);
+
+      const bodies = await systemBodies(sub.id);
+      const stop = bodies.find((b) => b.startsWith("Backend worker stopped without reporting."));
+      expect(stop).toContain("> Should the API use REST or RPC?");
+      expect(stop!.length).toBeLessThan(400);
+      expect(stop).not.toContain("—");
+      expect(sentPrompts).toHaveLength(1);
+      expect(sentPrompts[0]?.agentId).toBe("agent-lead");
+      expect(sentPrompts[0]?.text).toContain(`${sub.key}: Backend worker stopped without reporting.`);
+      expect(await systemBodies(parent.id)).toContain(`${sub.key}: Backend worker stopped without reporting.`);
+
+      await fire("agent.turn_ended", ended);
+      expect((await systemBodies(sub.id)).filter((b) => b.includes("stopped without reporting"))).toHaveLength(1);
+      expect(sentPrompts).toHaveLength(1);
+    });
+
+    it("stays quiet when the worker commented or changed status, and for top-level tasks", async () => {
+      const { parent, sub } = setupLeadAndWorker();
+      const ended = (id: string) => ({ agent: agentRef(id), turnId: "t", outcome: { kind: "completed" }, timeline: [] });
+
+      await fire("agent.turn_started", { agent: agentRef("agent-worker"), turnId: "t" });
+      await runTasksCli(["comment", sub.key, "--body", "API done"], store, domain, { threadId: "agent-worker" });
+      await fire("agent.turn_ended", ended("agent-worker"));
+
+      await fire("agent.turn_started", { agent: agentRef("agent-worker"), turnId: "t" });
+      await runTasksCli(["update", sub.key, "--status", "in_review"], store, domain, { threadId: "agent-worker" });
+      await fire("agent.turn_ended", ended("agent-worker"));
+
+      await fire("agent.turn_started", { agent: agentRef("agent-lead"), turnId: "t" });
+      await fire("agent.turn_ended", ended("agent-lead"));
+
+      expect((await systemBodies(sub.id)).some((b) => b.includes("stopped without reporting"))).toBe(false);
+      expect((await systemBodies(parent.id)).some((b) => b.includes("stopped without reporting"))).toBe(false);
+      expect(sentPrompts).toHaveLength(0);
+    });
+
+    it("keeps the failed comment for a failed worker turn and also wakes the lead", async () => {
+      const { sub } = setupLeadAndWorker();
+      await fire("agent.turn_started", { agent: agentRef("agent-worker"), turnId: "t" });
+      await fire("agent.turn_ended", {
+        agent: agentRef("agent-worker"),
+        turnId: "t",
+        outcome: { kind: "failed", error: { message: "boom" } },
+        timeline: [],
+      });
+      const bodies = await systemBodies(sub.id);
+      expect(bodies.some((b) => b.includes("failed"))).toBe(true);
+      expect(bodies.some((b) => b.includes("stopped without reporting"))).toBe(false);
+      expect(sentPrompts.map((p) => p.agentId)).toEqual(["agent-lead"]);
+      expect(sentPrompts[0]?.text).toContain(`${sub.key}: Backend worker stopped without reporting.`);
+    });
+
+    it("tracks the first turn of a delegated worker", async () => {
+      const { sub } = setupLeadAndWorker();
+      await domain.delegate({ taskId: sub.id, presetId: domain.listPresets().presets[0]!.id });
+      await fire("agent.turn_ended", { agent: agentRef("agent-uuid-1001"), turnId: "t", outcome: { kind: "completed" }, timeline: [] });
+      expect((await systemBodies(sub.id)).some((b) => b.includes("stopped without reporting"))).toBe(true);
+    });
+
+    it("reconciles stale agent status once, on the first Paseo capture", async () => {
+      const project = domain.createProject({ name: "Rec", prefix: "REC", color: "blue" }).project;
+      const task = domain.createTask({ projectId: project.id, title: "Recover", status: "in_progress" });
+      if (!task.ok) throw new Error("task not created");
+      const upsert = (threadId: string, liveStatus: "working" | "completed") =>
+        store.tasks.upsertTaskThread({ taskId: task.task.id, threadId, workspaceId: null, presetName: "Worker", title: threadId, liveStatus });
+      upsert("agent-alive", "working");
+      const gone = upsert("agent-gone", "working");
+      upsert("agent-done", "completed");
+      store.tasks.setTaskThreadHeartbeatId(gone.id, "hb_gone");
+
+      const refresh = vi.fn(async (id: string) =>
+        id === "agent-gone" ? null : { agent: { id, status: "idle", archivedAt: null }, project: null },
+      );
+      const paseo = { agents: { ref: (id: string) => ({ refresh: () => refresh(id) }) } };
+      const runCli = vi.fn(async () => "{}");
+      const capture = reconcileOnFirstCapture(store, runCli);
+      capture(paseo as never);
+      capture(paseo as never);
+
+      await vi.waitFor(() => {
+        const statuses = Object.fromEntries(
+          domain.listTaskThreads({ taskId: task.task.id }).taskThreads.map((t) => [t.threadId, t.liveStatus]),
+        );
+        expect(statuses).toEqual({ "agent-alive": "idle", "agent-gone": "completed", "agent-done": "completed" });
+      });
+      await vi.waitFor(() => expect(runCli).toHaveBeenCalledWith(["heartbeat", "delete", "hb_gone"], { PASEO_AGENT_ID: "agent-gone" }));
+      expect(refresh.mock.calls.map(([id]) => id).sort()).toEqual(["agent-alive", "agent-gone"]);
+    });
+
+    it("round-trips a preset check-in through the CLI", async () => {
+      const created = await runTasksCli(
+        ["preset", "create", "--name", "Worker", "--provider", "codex", "--model", "gpt-5.4", "--check-in", "0 9 * * 1-5"],
+        store,
+        domain,
+      );
+      expect(created.exitCode).toBe(0);
+      expect((await runTasksCli(["preset", "show", "Worker"], store, domain)).stdout).toMatch(/^Check-in\s+0 9 \* \* 1-5$/m);
+      expect(JSON.parse((await runTasksCli(["preset", "show", "Worker", "--json"], store, domain)).stdout).preset.checkIn).toBe("0 9 * * 1-5");
+
+      expect((await runTasksCli(["preset", "update", "Worker", "--check-in", "0 * * * *"], store, domain)).exitCode).toBe(0);
+      expect((await runTasksCli(["preset", "show", "Worker"], store, domain)).stdout).toMatch(/^Check-in\s+0 \* \* \* \*$/m);
+      expect((await runTasksCli(["preset", "update", "Worker", "--check-in", "off"], store, domain)).exitCode).toBe(0);
+      expect((await runTasksCli(["preset", "show", "Worker"], store, domain)).stdout).not.toMatch(/^Check-in/m);
+
+      const invalid = await runTasksCli(["preset", "update", "Worker", "--check-in", "hourly"], store, domain);
+      expect(invalid.exitCode).not.toBe(0);
+      expect(domain.listPresets().presets.find((p) => p.name === "Worker")?.checkIn).toBeNull();
+      expect((await runTasksCli(["--help"], store, domain)).stdout).toContain("--check-in");
+    });
+
+    function delegationSetup(runCli: ReturnType<typeof vi.fn>) {
+      const heartbeatDomain = createDomainHandlers(store, () => mockPaseo as never, runCli as never);
+      const project = heartbeatDomain.createProject({ name: "Beat", prefix: "BEAT", color: "blue", linkedBbProjectId: "prj_demo123" }).project;
+      const task = heartbeatDomain.createTask({ projectId: project.id, title: "Long job", status: "todo" });
+      if (!task.ok) throw new Error("task not created");
+      const preset = heartbeatDomain.createPreset({
+        name: "Checked worker",
+        providerId: "codex",
+        modelId: "gpt-5.4",
+        reasoningLevel: "high",
+        permissionMode: "auto",
+        checkIn: "0 * * * *",
+      }).preset;
+      return { heartbeatDomain, task: task.task, preset };
+    }
+
+    it("creates a check-in heartbeat on delegation and deletes it when the task is done", async () => {
+      const runCli = vi.fn(async (args: readonly string[]) => (args[1] === "create" ? JSON.stringify({ id: "hb_1" }) : "{}"));
+      const { heartbeatDomain, task, preset } = delegationSetup(runCli);
+
+      await heartbeatDomain.delegate({ taskId: task.id, presetId: domain.listPresets().presets[0]!.id });
+      expect(runCli).not.toHaveBeenCalled();
+
+      await heartbeatDomain.delegate({ taskId: task.id, presetId: preset.id });
+      expect(runCli).toHaveBeenCalledTimes(1);
+      const [args, env] = runCli.mock.calls[0]! as [string[], Record<string, string>];
+      expect(env).toEqual({ PASEO_AGENT_ID: "agent-uuid-1001" });
+      expect(args.slice(0, 3)).toEqual(["heartbeat", "create", "--cron=0 * * * *"]);
+      expect(args).toContain("--json");
+      expect(args.some((a) => a.startsWith("--timezone="))).toBe(true);
+      expect(args.at(-1)).toBe(`Check-in: follow the Check-ins section of your instructions for ${task.key}.`);
+
+      heartbeatDomain.updateTask({ taskId: task.id, status: "done" });
+      await vi.waitFor(() => expect(runCli).toHaveBeenCalledWith(["heartbeat", "delete", "hb_1"], { PASEO_AGENT_ID: "agent-uuid-1001" }));
+      heartbeatDomain.updateTask({ taskId: task.id, status: "canceled" });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(runCli).toHaveBeenCalledTimes(2);
+    });
+
+    it("deletes a check-in heartbeat when its thread is detached", async () => {
+      const runCli = vi.fn(async (args: readonly string[]) => (args[1] === "create" ? JSON.stringify({ id: "hb_2" }) : "{}"));
+      const { heartbeatDomain, task, preset } = delegationSetup(runCli);
+      await heartbeatDomain.delegate({ taskId: task.id, presetId: preset.id });
+      heartbeatDomain.taskThreadsDetach({ taskId: task.id, threadId: "agent-uuid-1001" });
+      await vi.waitFor(() => expect(runCli).toHaveBeenCalledWith(["heartbeat", "delete", "hb_2"], { PASEO_AGENT_ID: "agent-uuid-1001" }));
+    });
+
+    it("still delegates when the check-in heartbeat cannot be created", async () => {
+      const runCli = vi.fn(async () => {
+        throw new Error("paseo: command not found");
+      });
+      const { heartbeatDomain, task, preset } = delegationSetup(runCli);
+      const result = await heartbeatDomain.delegate({ taskId: task.id, presetId: preset.id });
+      expect(result.threadId).toBe("agent-uuid-1001");
+      expect(heartbeatDomain.listTaskThreads({ taskId: task.id }).taskThreads).toHaveLength(1);
+      const bodies = await systemBodies(task.id);
+      expect(bodies.some((b) => b.startsWith("Check-in could not be scheduled") && b.includes("command not found"))).toBe(true);
+    });
   });
 
   it("transforms ::task{key=...} directives in assistant timeline messages", () => {

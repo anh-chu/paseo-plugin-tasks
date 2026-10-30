@@ -165,6 +165,7 @@ interface PresetRow {
   environment_kind: PresetEnvironmentKind;
   base_branch: string | null;
   machine_id: string | null;
+  check_in: string | null;
   instructions: string;
   builtin: number;
   created_at: string;
@@ -469,6 +470,7 @@ function presetFromRow(row: PresetRow): Preset {
     environmentKind: row.environment_kind,
     baseBranch: row.base_branch,
     machineId: row.machine_id,
+    checkIn: row.check_in,
     instructions: row.instructions,
     builtin: row.builtin === 1,
     createdAt: row.created_at,
@@ -501,6 +503,15 @@ function validatePresetEnvironment(input: {
     );
   }
   return { environmentKind: input.environmentKind, baseBranch, machineId };
+}
+
+function validateCheckIn(checkIn: string | null): string | null {
+  if (checkIn === null) return null;
+  const fields = checkIn.trim().split(/\s+/);
+  if (fields.length !== 5 || !fields.every((field) => /^[0-9A-Za-z*,/-]+$/.test(field))) {
+    throw new Error(`Check-in must be a five-field cron expression: ${checkIn}`);
+  }
+  return fields.join(" ");
 }
 
 export function escapeLike(value: string): string {
@@ -1819,6 +1830,76 @@ export function createTasksStore(db: PluginDatabase) {
     return requireTaskThread(id);
   }
 
+  function listUnfinishedTaskThreads(): TaskThread[] {
+    return db
+      .prepare<[], TaskThreadRow>(
+        "SELECT * FROM task_threads WHERE live_status <> 'completed' ORDER BY id",
+      )
+      .all()
+      .map(taskThreadFromRow);
+  }
+
+  function setTaskThreadTurnStartedAt(id: string, startedAt: string): void {
+    db.prepare<[string, string]>(
+      "UPDATE task_threads SET turn_started_at = ? WHERE id = ?",
+    ).run(startedAt, id);
+  }
+
+  // Returns the turn start once and clears it, so a turn is judged only once.
+  function takeTaskThreadTurnStartedAt(id: string): string | null {
+    const row = db
+      .prepare<[string], { turn_started_at: string | null }>(
+        "SELECT turn_started_at FROM task_threads WHERE id = ?",
+      )
+      .get(id);
+    if (!row?.turn_started_at) return null;
+    db.prepare<[string]>(
+      "UPDATE task_threads SET turn_started_at = NULL WHERE id = ?",
+    ).run(id);
+    return row.turn_started_at;
+  }
+
+  function getTaskThreadHeartbeatId(id: string): string | null {
+    return (
+      db
+        .prepare<[string], { heartbeat_id: string | null }>(
+          "SELECT heartbeat_id FROM task_threads WHERE id = ?",
+        )
+        .get(id)?.heartbeat_id ?? null
+    );
+  }
+
+  function setTaskThreadHeartbeatId(id: string, heartbeatId: string | null): void {
+    db.prepare<[string | null, string]>(
+      "UPDATE task_threads SET heartbeat_id = ? WHERE id = ?",
+    ).run(heartbeatId, id);
+  }
+
+  // The CLI and MCP bridge record an agent's status change with the author
+  // "agent (<id>)", so that is how a status change by this agent is found.
+  function agentReportedSince(
+    taskId: string,
+    threadId: string,
+    since: string,
+  ): boolean {
+    return Boolean(
+      db
+        .prepare<[string, string, string, string], { found: number }>(
+          `
+          SELECT 1 AS found FROM comments
+          WHERE task_id = ?
+            AND created_at >= ?
+            AND (
+              (kind = 'agent' AND thread_id = ?)
+              OR (kind = 'system' AND author_name = ? AND body LIKE 'Status changed to %')
+            )
+          LIMIT 1
+        `,
+        )
+        .get(taskId, since, threadId, `agent (${threadId})`),
+    );
+  }
+
   function deleteTaskThread(id: string): boolean {
     return (
       db.prepare<[string]>("DELETE FROM task_threads WHERE id = ?").run(id)
@@ -1852,6 +1933,7 @@ export function createTasksStore(db: PluginDatabase) {
         PresetEnvironmentKind,
         string | null,
         string | null,
+        string | null,
         string,
         number,
         string,
@@ -1861,9 +1943,9 @@ export function createTasksStore(db: PluginDatabase) {
       INSERT INTO presets (
         id, name, provider_id, model_id, reasoning_level, service_tier,
         permission_mode,
-        environment_kind, base_branch, machine_id, instructions, builtin,
+        environment_kind, base_branch, machine_id, check_in, instructions, builtin,
         created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     ).run(
       id,
@@ -1876,6 +1958,7 @@ export function createTasksStore(db: PluginDatabase) {
       environment.environmentKind,
       environment.baseBranch,
       environment.machineId,
+      validateCheckIn(input.checkIn ?? null),
       input.instructions,
       input.builtin ? 1 : 0,
       nowIso(),
@@ -1912,6 +1995,7 @@ export function createTasksStore(db: PluginDatabase) {
         PresetEnvironmentKind,
         string | null,
         string | null,
+        string | null,
         string,
         number,
         string,
@@ -1921,7 +2005,7 @@ export function createTasksStore(db: PluginDatabase) {
       UPDATE presets SET
         name = ?, provider_id = ?, model_id = ?, reasoning_level = ?,
         service_tier = ?, permission_mode = ?, environment_kind = ?, base_branch = ?,
-        machine_id = ?, instructions = ?, builtin = ?
+        machine_id = ?, check_in = ?, instructions = ?, builtin = ?
       WHERE id = ?
     `,
     ).run(
@@ -1944,6 +2028,7 @@ export function createTasksStore(db: PluginDatabase) {
       environment.environmentKind,
       environment.baseBranch,
       environment.machineId,
+      input.checkIn === undefined ? current.checkIn : validateCheckIn(input.checkIn),
       input.instructions ?? current.instructions,
       (input.builtin ?? current.builtin) ? 1 : 0,
       id,
@@ -2006,6 +2091,12 @@ export function createTasksStore(db: PluginDatabase) {
     listTaskThreadsByThreadId,
     listTaskThreads,
     updateTaskThreadStatus,
+    listUnfinishedTaskThreads,
+    setTaskThreadTurnStartedAt,
+    takeTaskThreadTurnStartedAt,
+    getTaskThreadHeartbeatId,
+    setTaskThreadHeartbeatId,
+    agentReportedSince,
     deleteTaskThread,
     createPreset,
     getPreset,

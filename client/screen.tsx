@@ -20,6 +20,7 @@ import {
   TASK_PRIORITIES,
   TASK_SORTS,
   TASK_STATUSES,
+  TASKS_PAGE_MAX_LIMIT,
   type TaskPriority,
   type TaskSort,
   type TaskStatus,
@@ -91,6 +92,7 @@ function TasksBoardAndListShell({
   const [groupBy, setGroupBy] = useState<"status" | "stage">("status");
   const [searchQuery, setSearchQuery] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
+  const [needsYou, setNeedsYou] = useState(false);
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | null>(
     null,
   );
@@ -164,6 +166,7 @@ function TasksBoardAndListShell({
     queryKey: [
       "tasks",
       "list",
+      needsYou,
       selectedProjectId,
       activeOnly,
       priorityFilter,
@@ -171,17 +174,33 @@ function TasksBoardAndListShell({
       sortBy,
     ],
     queryFn: () =>
-      listTasks({
-        ...(selectedProjectId ? { projectId: selectedProjectId } : {}),
-        ...(priorityFilter ? { priorities: [priorityFilter] } : {}),
-        activeOnly,
-        parentTaskId: null,
-        ...(searchQuery.trim() ? { search: searchQuery.trim() } : {}),
-        sort: sortBy,
-        limit: 300,
-      }),
+      listTasks(
+        needsYou
+          ? {
+              statuses: ["in_review"],
+              ...(priorityFilter ? { priorities: [priorityFilter] } : {}),
+              ...(searchQuery.trim() ? { search: searchQuery.trim() } : {}),
+              limit: TASKS_PAGE_MAX_LIMIT,
+            }
+          : {
+              ...(selectedProjectId ? { projectId: selectedProjectId } : {}),
+              ...(priorityFilter ? { priorities: [priorityFilter] } : {}),
+              activeOnly,
+              parentTaskId: null,
+              ...(searchQuery.trim() ? { search: searchQuery.trim() } : {}),
+              sort: sortBy,
+              limit: 300,
+            },
+      ),
     refetchInterval: 3000,
   });
+  const needsYouQuery = useQuery({
+    queryKey: ["tasks", "needsYou"],
+    queryFn: () =>
+      listTasks({ statuses: ["in_review"], limit: TASKS_PAGE_MAX_LIMIT }),
+    refetchInterval: 4000,
+  });
+  const needsYouCount = needsYouQuery.data?.tasks.length ?? 0;
 
   const allLabelsQuery = useQuery({
     queryKey: [
@@ -202,15 +221,21 @@ function TasksBoardAndListShell({
     enabled: projects.length > 0,
   });
 
-  const tasks = tasksQuery.data?.tasks ?? [];
+  const tasks = useMemo(() => {
+    const listed = tasksQuery.data?.tasks ?? [];
+    return needsYou
+      ? [...listed].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      : listed;
+  }, [needsYou, tasksQuery.data]);
   const labelById = allLabelsQuery.data ?? new Map<string, Label>();
   const projectById = useMemo(
     () => new Map(projects.map((p) => [p.id, p])),
     [projects],
   );
-  const currentProject = selectedProjectId
-    ? projectById.get(selectedProjectId) ?? null
-    : null;
+  const currentProject =
+    selectedProjectId && !needsYou
+      ? projectById.get(selectedProjectId) ?? null
+      : null;
 
   const showCompleted =
     settings.status === "ready" ? settings.values.showCompletedInBoard : true;
@@ -416,6 +441,7 @@ function TasksBoardAndListShell({
               onPress={() => {
                 setSelectedProjectId(null);
                 setActiveOnly(false);
+                setNeedsYou(false);
               }}
               style={{
                 flexDirection: "row",
@@ -425,7 +451,7 @@ function TasksBoardAndListShell({
                 paddingVertical: 7,
                 borderRadius: 8,
                 backgroundColor:
-                  selectedProjectId === null && !activeOnly
+                  selectedProjectId === null && !activeOnly && !needsYou
                     ? theme.colors.surface2
                     : "transparent",
               }}
@@ -441,7 +467,9 @@ function TasksBoardAndListShell({
                     color: theme.colors.foreground,
                     fontSize: 13,
                     fontWeight:
-                      selectedProjectId === null && !activeOnly ? "700" : "500",
+                      selectedProjectId === null && !activeOnly && !needsYou
+                        ? "700"
+                        : "500",
                   }}
                 >
                   All Tasks
@@ -459,7 +487,10 @@ function TasksBoardAndListShell({
 
             <Pressable
               accessibilityRole="button"
-              onPress={() => setActiveOnly((prev) => !prev)}
+              onPress={() => {
+                setActiveOnly((prev) => !prev);
+                setNeedsYou(false);
+              }}
               style={{
                 flexDirection: "row",
                 alignItems: "center",
@@ -487,6 +518,48 @@ function TasksBoardAndListShell({
               <Text style={{ color: "#f59e0b", fontSize: 11, fontWeight: "700" }}>
                 {summaries.reduce((acc, s) => acc + s.activeAgentCount, 0)}
               </Text>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                setNeedsYou(true);
+                setActiveOnly(false);
+              }}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                paddingHorizontal: 10,
+                paddingVertical: 7,
+                borderRadius: 8,
+                backgroundColor: needsYou
+                  ? theme.colors.surface2
+                  : "transparent",
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <StatusIcon status="in_review" theme={theme} size={14} />
+                <Text
+                  style={{
+                    color: theme.colors.foreground,
+                    fontSize: 13,
+                    fontWeight: needsYou ? "700" : "500",
+                  }}
+                >
+                  Needs you
+                </Text>
+              </View>
+              {needsYouCount > 0 ? (
+                <Text
+                  style={{
+                    color: theme.colors.foregroundMuted,
+                    fontSize: 11,
+                  }}
+                >
+                  {needsYouCount}
+                </Text>
+              ) : null}
             </Pressable>
 
             <View
@@ -540,13 +613,17 @@ function TasksBoardAndListShell({
                     </Text>
                   </View>
                   {folderProjects.map((project) => {
-                    const active = selectedProjectId === project.id;
+                    const active =
+                      selectedProjectId === project.id && !needsYou;
                     const sum = summaryByProject.get(project.id);
                     return (
                       <Pressable
                         key={project.id}
                         accessibilityRole="button"
-                        onPress={() => setSelectedProjectId(project.id)}
+                        onPress={() => {
+                          setSelectedProjectId(project.id);
+                          setNeedsYou(false);
+                        }}
                         style={{
                           flexDirection: "row",
                           alignItems: "center",
@@ -599,13 +676,16 @@ function TasksBoardAndListShell({
             {projects
               .filter((p) => p.folderId === null)
               .map((project) => {
-                const active = selectedProjectId === project.id;
+                const active = selectedProjectId === project.id && !needsYou;
                 const sum = summaryByProject.get(project.id);
                 return (
                   <Pressable
                     key={project.id}
                     accessibilityRole="button"
-                    onPress={() => setSelectedProjectId(project.id)}
+                    onPress={() => {
+                      setSelectedProjectId(project.id);
+                      setNeedsYou(false);
+                    }}
                     style={{
                       flexDirection: "row",
                       alignItems: "center",
@@ -744,9 +824,11 @@ function TasksBoardAndListShell({
                   fontWeight: "700",
                 }}
               >
-                {currentProject
-                  ? `${currentProject.prefix} · ${currentProject.name}`
-                  : "All Tasks"}
+                {needsYou
+                  ? "Needs you"
+                  : currentProject
+                    ? `${currentProject.prefix} · ${currentProject.name}`
+                    : "All Tasks"}
               </Text>
               {currentProject?.linkedBbProjectId ? (
                 <View
@@ -774,6 +856,7 @@ function TasksBoardAndListShell({
               {/* View Switcher */}
               <View
                 style={{
+                  display: needsYou ? "none" : "flex",
                   flexDirection: "row",
                   padding: 3,
                   borderRadius: 8,
@@ -943,13 +1026,16 @@ function TasksBoardAndListShell({
             >
               <Pressable
                 accessibilityRole="button"
-                onPress={() => setSelectedProjectId(null)}
+                onPress={() => {
+                  setSelectedProjectId(null);
+                  setNeedsYou(false);
+                }}
                 style={{
                   paddingHorizontal: 9,
                   paddingVertical: 5,
                   borderRadius: 999,
                   backgroundColor:
-                    selectedProjectId === null
+                    selectedProjectId === null && !needsYou
                       ? theme.colors.accent
                       : theme.colors.surface2,
                 }}
@@ -957,7 +1043,7 @@ function TasksBoardAndListShell({
                 <Text
                   style={{
                     color:
-                      selectedProjectId === null
+                      selectedProjectId === null && !needsYou
                         ? theme.colors.accentForeground
                         : theme.colors.foreground,
                     fontSize: 11,
@@ -967,13 +1053,40 @@ function TasksBoardAndListShell({
                   All
                 </Text>
               </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setNeedsYou(true)}
+                style={{
+                  paddingHorizontal: 9,
+                  paddingVertical: 5,
+                  borderRadius: 999,
+                  backgroundColor: needsYou
+                    ? theme.colors.accent
+                    : theme.colors.surface2,
+                }}
+              >
+                <Text
+                  style={{
+                    color: needsYou
+                      ? theme.colors.accentForeground
+                      : theme.colors.foreground,
+                    fontSize: 11,
+                    fontWeight: "600",
+                  }}
+                >
+                  {needsYouCount > 0 ? `Needs you ${needsYouCount}` : "Needs you"}
+                </Text>
+              </Pressable>
               {projects.map((p) => {
-                const active = selectedProjectId === p.id;
+                const active = selectedProjectId === p.id && !needsYou;
                 return (
                   <Pressable
                     key={p.id}
                     accessibilityRole="button"
-                    onPress={() => setSelectedProjectId(p.id)}
+                    onPress={() => {
+                      setSelectedProjectId(p.id);
+                      setNeedsYou(false);
+                    }}
                     style={{
                       flexDirection: "row",
                       alignItems: "center",
@@ -1091,7 +1204,7 @@ function TasksBoardAndListShell({
                 );
               })}
 
-              {TASK_SORTS.map((s) => {
+              {(needsYou ? [] : TASK_SORTS).map((s) => {
                 const active = sortBy === s;
                 return (
                   <Pressable
@@ -1210,7 +1323,7 @@ function TasksBoardAndListShell({
           /* Board or List + Optional Split Detail Pane */
           <View style={{ flex: 1, flexDirection: "row", minHeight: 0 }}>
             <View style={{ flex: 1, minWidth: 0 }}>
-              {viewMode === "board" ? (
+              {viewMode === "board" && !needsYou ? (
                 <ScrollView
                   horizontal
                   style={{ flex: 1 }}
@@ -1548,15 +1661,16 @@ function TasksBoardAndListShell({
                     gap: 14,
                   }}
                 >
-                  {(
-                    [
-                      "in_progress",
-                      "in_review",
-                      "todo",
-                      "backlog",
-                      "done",
-                      "canceled",
-                    ] as const
+                  {(needsYou
+                    ? (["in_review"] as const)
+                    : ([
+                        "in_progress",
+                        "in_review",
+                        "todo",
+                        "backlog",
+                        "done",
+                        "canceled",
+                      ] as const)
                   ).map((status) => {
                     const groupTasks = tasksByStatus.get(status) ?? [];
                     const collapsed = collapsedStatuses.has(status);

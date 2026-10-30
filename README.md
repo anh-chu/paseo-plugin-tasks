@@ -33,13 +33,16 @@ Requires Paseo 0.11.2 or later, and Node 24 or later on the daemon host (the sto
 
 ## Delegation
 
-A preset bundles a provider and model, a thinking level, an optional fast service tier, a permission mode, and the environment:
+A preset bundles a provider and model, a thinking level, an optional fast service tier, a permission mode, the environment, and an optional check-in:
 
 | Field | Values |
 | --- | --- |
 | Environment | `project-default` (run in the linked Paseo project) or `new-worktree` (branch a fresh git worktree from the project) |
 | Permission mode | `accept-edits`, `auto`, or `full` |
 | Service tier | normal or fast, when the provider supports it |
+| Check-in | off, or a cron schedule (every hour, weekdays at 9:00, every day at 9:00, or any five-field cron from the CLI) |
+
+A preset with a check-in gives each agent it starts a Paseo heartbeat on that schedule, in the daemon host's time zone, asking it to follow the Check-ins section of its instructions. The heartbeat is removed when the task is done or canceled, or the session is detached, closed, or archived.
 
 Dispatching builds a seed prompt containing the task, its description, sub-tasks, attachments, recent comments, the preset's own instructions, and anything you type in the dispatch box. The new agent session is attached to the task automatically.
 
@@ -55,16 +58,16 @@ The plugin puts a `paseo-tasks` command on each agent's `PATH`, with `bb-tasks` 
 
 ```
 status                                Show the installed Tasks plugin name and version
-project create|list|show|update       Manage projects, prefixes, and Paseo project links
+project create|list|show|update       Manage projects, prefixes, Paseo project links, and stages (--stages "A,B,C", "" turns off)
 folder create|list|update|delete      Group projects into folders
 create                                Create a task (--project, --title, --description, --priority, --due, --label, --parent, --attach)
 list                                  List and filter tasks (--project, --status, --priority, --label, --active, --search, --sort, --limit, --cursor)
 show <key-or-id>                      Show the task, sub-tasks, comments, attachments, and attached agents
-update <key-or-id>                    Change status, priority, title, description, due date, parent, or labels
+update <key-or-id>                    Change status, priority, title, description, due date, parent, labels, or stage (--stage <name>, none clears)
 move <key-or-id>                      Move a task and its sub-tasks to another project
 comment <key-or-id>                   Add a Markdown comment (--body or --body-file, optional --notify)
 attachment add|get|list|remove        Manage task and comment attachments
-preset list|show|create|update|delete Manage reusable agent execution presets
+preset list|show|create|update|delete Manage reusable agent execution presets (--check-in "<cron>", off clears)
 delegate <key>                        Start and attach a new agent from a preset
 attach <key-or-id>                    Attach an agent session (--thread or $PASEO_AGENT_ID)
 detach <key-or-id>                    Detach an agent session
@@ -90,6 +93,7 @@ A comment sent with **Notify agent** is delivered to the agent that last replied
 | Surface | Where |
 | --- | --- |
 | Tasks screen | Sidebar item, `/tasks [TASK-KEY]`, command center |
+| Needs you | Tasks screen navigation; every task and sub-task in review across projects, newest first |
 | Workspace board panel | Workspace and explorer panels, command center |
 | Agent task inspector | Agent panel, `/task-panel`, composer pill |
 | Composer pill | Beside the composer for each agent; shows the linked task key |
@@ -111,7 +115,7 @@ A comment sent with **Notify agent** is delivered to the agent that last replied
 - **Bridge**: the plugin server serves a loopback HTTP endpoint with a random bearer token written to `$PASEO_HOME/plugin-data/tasks/bridge.json` (owner-only). It writes `paseo-tasks`, `bb-tasks`, `bb`, and `tasks-mcp.mjs` into `$PASEO_HOME/plugin-data/tasks/bin`. The CLI and MCP server refuse to run without the bridge, so the daemon is the single writer.
 - **Daemon connection**: if no Paseo API context has been received yet, delegation and attachment use the installed `paseo` CLI to connect to the local daemon. The CLI must be on the daemon's `PATH`.
 - **Agent wiring**: a `before` hook on agent creation injects the MCP server and the instructions; a `before` hook on session open prepends the bin directory to `PATH` and sets `BB_THREAD_ID` and `PASEO_TASK_KEY`.
-- **Lifecycle**: `agent.created`, `agent.turn_started`, `agent.turn_ended`, `agent.closed`, and `agent.archived` update the tracked state of each attached session. Closing or failing writes a system comment on the task.
+- **Lifecycle**: `agent.created`, `agent.turn_started`, `agent.turn_ended`, `agent.closed`, and `agent.archived` update the tracked state of each attached session. Closing or failing writes a system comment on the task. When an agent on a sub-task ends a turn without commenting or changing the status, the sub-task gets a system comment and the parent task's agent is notified. On load, sessions still shown as running are refreshed from Paseo.
 
 ## Development
 

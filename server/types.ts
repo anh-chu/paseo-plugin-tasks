@@ -113,6 +113,7 @@ export interface Preset {
   environmentKind: PresetEnvironmentKind;
   baseBranch: string | null;
   machineId: string | null;
+  checkIn: string | null;
   instructions: string;
   builtin: boolean;
   createdAt: string;
@@ -258,6 +259,7 @@ export interface CreatePresetInput {
   environmentKind: PresetEnvironmentKind;
   baseBranch: string | null;
   machineId: string | null;
+  checkIn?: string | null;
   instructions: string;
   builtin?: boolean;
 }
@@ -272,6 +274,7 @@ export interface UpdatePresetInput {
   environmentKind?: PresetEnvironmentKind;
   baseBranch?: string | null;
   machineId?: string | null;
+  checkIn?: string | null;
   instructions?: string;
   builtin?: boolean;
 }

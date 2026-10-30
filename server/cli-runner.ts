@@ -241,6 +241,12 @@ function getRepeatableFlag(
   return result;
 }
 
+function checkInFlag(parsed: ParsedArgs): string | null | undefined {
+  const value = getFlag(parsed, "check-in");
+  if (value === undefined) return undefined;
+  return value.trim().toLowerCase() === "off" ? null : value;
+}
+
 const HELP_TEXT = `Usage: paseo-tasks <command> [options]
 
 Commands:
@@ -254,7 +260,7 @@ Commands:
   move <key-or-id>                    Move a task and its subtasks to --project
   comment <key-or-id>                 Add a Markdown comment (--body or --body-file, optional --notify)
   attachment add|get|list|remove      Manage task or comment file attachments
-  preset list|show|create|update|delete Manage reusable agent execution presets
+  preset list|show|create|update|delete Manage reusable agent execution presets (--check-in "<cron>", off clears)
   delegate <key>                      Start and attach a new Paseo agent using --preset
   attach <key-or-id>                  Attach an agent session (--thread or $PASEO_AGENT_ID) to a task
   detach <key-or-id>                  Detach an agent session from a task
@@ -1372,6 +1378,9 @@ export async function runTasksCli(
                   : "project-default",
               ],
               ["Base branch", preset.baseBranch ?? "-"],
+              ...(preset.checkIn
+                ? [["Check-in", preset.checkIn] as [string, string]]
+                : []),
               ["Instructions", preset.instructions || "-"],
               ["ID", preset.id],
             ]),
@@ -1411,6 +1420,7 @@ export async function runTasksCli(
         environmentKind,
         baseBranch: getFlag(parsed, "base-branch") ?? null,
         machineId: null,
+        checkIn: checkInFlag(parsed) ?? null,
         instructions: getFlag(parsed, "instructions") ?? "",
       });
       return {
@@ -1451,6 +1461,7 @@ export async function runTasksCli(
           | undefined,
         environmentKind,
         baseBranch: getFlag(parsed, "base-branch"),
+        checkIn: checkInFlag(parsed),
         instructions: getFlag(parsed, "instructions"),
       });
       return {

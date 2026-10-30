@@ -58,6 +58,7 @@ import { connectBridgeDaemon } from "./server/daemon-connection";
 import {
   createApiStore,
   createDomainHandlers,
+  reconcileOnFirstCapture,
   registerLifecycleHooks,
   seedDemoData,
 } from "./server/domain";
@@ -68,8 +69,10 @@ export default function contribute(server: PluginServerContext) {
   store.ensureDefaultPresets();
 
   let latestPaseo: PaseoApi | null = null;
+  const reconcileOnce = reconcileOnFirstCapture(store);
   const capturePaseo = (paseo: PaseoApi) => {
     latestPaseo = paseo;
+    reconcileOnce(paseo);
   };
 
   const domain = createDomainHandlers(store, () => latestPaseo);
@@ -81,7 +84,7 @@ export default function contribute(server: PluginServerContext) {
     if (!bridgeConnecting) {
       bridgeConnecting = connectBridgeDaemon().then((connection) => {
         bridgeConnection = connection;
-        if (!latestPaseo) latestPaseo = connection.paseo;
+        if (!latestPaseo) capturePaseo(connection.paseo);
       }).finally(() => { bridgeConnecting = null; });
     }
     await bridgeConnecting;
