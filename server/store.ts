@@ -53,6 +53,8 @@ type SqlParameter = string | number;
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const POSITION_STEP = 1_024;
 const MIN_POSITION_GAP = 0.000_001;
+const MAX_PROJECT_STAGES = 20;
+const MAX_STAGE_NAME_LENGTH = 40;
 
 interface FolderRow {
   id: string;
@@ -69,6 +71,7 @@ interface ProjectRow {
   color: string;
   folder_id: string | null;
   linked_bb_project_id: string | null;
+  stages: string | null;
   created_at: string;
 }
 
@@ -83,6 +86,7 @@ interface TaskRow {
   priority: Task["priority"];
   due_date: string | null;
   parent_task_id: string | null;
+  stage: string | null;
   position: number;
   created_at: string;
   updated_at: string;
@@ -303,6 +307,28 @@ function validateLinkedProjectId(id: string | null): string | null {
   return trimmed;
 }
 
+function validateStages(stages: readonly string[]): string | null {
+  const names = stages.map((stage) => stage.trim()).filter(Boolean);
+  if (names.length > MAX_PROJECT_STAGES) {
+    throw new Error(`A project can have at most ${MAX_PROJECT_STAGES} stages`);
+  }
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (name.length > MAX_STAGE_NAME_LENGTH) {
+      throw new Error(
+        `Stage names must contain at most ${MAX_STAGE_NAME_LENGTH} characters: ${name}`,
+      );
+    }
+    const folded = name.toLowerCase();
+    if (folded === "none") {
+      throw new Error('"none" clears a stage and cannot be a stage name');
+    }
+    if (seen.has(folded)) throw new Error(`Duplicate stage: ${name}`);
+    seen.add(folded);
+  }
+  return names.length > 0 ? JSON.stringify(names) : null;
+}
+
 function validateThreadId(id: string): string;
 function validateThreadId(id: null): null;
 function validateThreadId(id: string | null): string | null;
@@ -347,6 +373,7 @@ function projectFromRow(row: ProjectRow): Project {
     color: row.color,
     folderId: row.folder_id,
     linkedBbProjectId: row.linked_bb_project_id,
+    stages: row.stages ? (JSON.parse(row.stages) as string[]) : [],
     createdAt: row.created_at,
   };
 }
@@ -363,6 +390,7 @@ function taskFromRow(row: TaskRow): Task {
     priority: row.priority,
     dueDate: row.due_date,
     parentTaskId: row.parent_task_id,
+    stage: row.stage,
     position: row.position,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -631,12 +659,21 @@ export function createTasksStore(db: PluginDatabase) {
     const folderId = input.folderId ?? null;
     if (folderId !== null) requireFolder(folderId);
     db.prepare<
-      [string, string, string, string, string | null, string | null, string]
+      [
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string,
+      ]
     >(
       `
       INSERT INTO projects
-        (id, name, prefix, next_task_number, color, folder_id, linked_bb_project_id, created_at)
-      VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+        (id, name, prefix, next_task_number, color, folder_id, linked_bb_project_id, stages, created_at)
+      VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
     `,
     ).run(
       id,
@@ -645,6 +682,7 @@ export function createTasksStore(db: PluginDatabase) {
       requireNonEmpty(input.color, "Project color"),
       folderId,
       validateLinkedProjectId(input.linkedBbProjectId ?? null),
+      validateStages(input.stages ?? []),
       nowIso(),
     );
     return requireProject(id);
@@ -679,10 +717,21 @@ export function createTasksStore(db: PluginDatabase) {
     const folderId =
       input.folderId === undefined ? current.folderId : input.folderId;
     if (folderId !== null) requireFolder(folderId);
-    db.prepare<[string, string, string, string | null, string | null, string]>(
+    db.prepare<
+      [
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string,
+      ]
+    >(
       `
       UPDATE projects
-      SET name = ?, prefix = ?, color = ?, folder_id = ?, linked_bb_project_id = ?
+      SET name = ?, prefix = ?, color = ?, folder_id = ?, linked_bb_project_id = ?,
+        stages = ?
       WHERE id = ?
     `,
     ).run(
@@ -699,6 +748,7 @@ export function createTasksStore(db: PluginDatabase) {
       input.linkedBbProjectId === undefined
         ? current.linkedBbProjectId
         : validateLinkedProjectId(input.linkedBbProjectId),
+      validateStages(input.stages ?? current.stages),
       id,
     );
     return requireProject(id);
@@ -1121,6 +1171,7 @@ export function createTasksStore(db: PluginDatabase) {
           Task["priority"],
           string | null,
           string | null,
+          string | null,
           number,
           string,
           string,
@@ -1129,7 +1180,7 @@ export function createTasksStore(db: PluginDatabase) {
         `
         UPDATE tasks SET
           title = ?, description = ?, status = ?, priority = ?, due_date = ?,
-          parent_task_id = ?, position = ?, updated_at = ?
+          parent_task_id = ?, stage = ?, position = ?, updated_at = ?
         WHERE id = ?
       `,
       ).run(
@@ -1143,6 +1194,7 @@ export function createTasksStore(db: PluginDatabase) {
           ? current.dueDate
           : validateDueDate(input.dueDate),
         parentTaskId,
+        input.stage === undefined ? current.stage : input.stage,
         position,
         nowIso(),
         id,
@@ -1195,12 +1247,12 @@ export function createTasksStore(db: PluginDatabase) {
         "DELETE FROM task_key_aliases WHERE prefix = ? COLLATE NOCASE AND number = ?",
       );
       const moveRow = db.prepare<
-        [string, number, number, string | null, string, string]
+        [string, number, number, string | null, string | null, string, string]
       >(
         `
         UPDATE tasks
         SET project_id = ?, number = ?, position = ?, parent_task_id = ?,
-          updated_at = ?
+          stage = ?, updated_at = ?
         WHERE id = ?
       `,
       );
@@ -1228,6 +1280,9 @@ export function createTasksStore(db: PluginDatabase) {
           number,
           nextPosition.get(target.id, task.status)?.position ?? POSITION_STEP,
           task.id === root.id ? null : root.id,
+          target.stages.find(
+            (stage) => stage.toLowerCase() === task.stage?.toLowerCase(),
+          ) ?? null,
           updatedAt,
           task.id,
         );

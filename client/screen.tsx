@@ -34,6 +34,7 @@ import {
   seedDemoRpc,
   sidebarOpenTaskCountRpc,
   sidebarSummaryRpc,
+  updateTaskRpc,
   type Label,
   type Project,
   type Task,
@@ -76,6 +77,7 @@ function TasksBoardAndListShell({
   const listTasks = useRpc(listTasksRpc);
   const listLabels = useRpc(listLabelsRpc);
   const boardMove = useRpc(boardMoveRpc);
+  const updateTask = useRpc(updateTaskRpc);
   const sidebarSummary = useRpc(sidebarSummaryRpc);
   const seedDemo = useRpc(seedDemoRpc);
 
@@ -86,6 +88,7 @@ function TasksBoardAndListShell({
     initialTaskKey ?? null,
   );
   const [viewMode, setViewMode] = useState<"board" | "list">("board");
+  const [groupBy, setGroupBy] = useState<"status" | "stage">("status");
   const [searchQuery, setSearchQuery] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | null>(
@@ -228,9 +231,54 @@ function TasksBoardAndListShell({
     return map;
   }, [tasks]);
 
+  const projectStages = currentProject?.stages ?? [];
+  const groupByStage = groupBy === "stage" && projectStages.length > 0;
+  const boardColumns = useMemo(() => {
+    if (!groupByStage) {
+      return visibleStatuses.map((status) => ({
+        key: status,
+        label: STATUS_LABELS[status],
+        status: status as TaskStatus | null,
+        stage: null as string | null,
+        tasks: tasksByStatus.get(status) ?? [],
+      }));
+    }
+    const visibleTasks = tasks.filter((t) =>
+      (visibleStatuses as readonly TaskStatus[]).includes(t.status),
+    );
+    return [null, ...projectStages].map((stage) => ({
+      key: stage ?? "",
+      label: stage ?? "No stage",
+      status: null as TaskStatus | null,
+      stage,
+      tasks: visibleTasks.filter((t) =>
+        stage === null
+          ? t.stage === null || !projectStages.includes(t.stage)
+          : t.stage === stage,
+      ),
+    }));
+  }, [groupByStage, projectStages, tasks, tasksByStatus, visibleStatuses]);
+
   const invalidateAll = () => {
     void queryClient.invalidateQueries({ queryKey: ["tasks"] });
   };
+
+  async function handleMoveStage(task: Task, targetStage: string | null) {
+    try {
+      const res = await updateTask({
+        taskId: task.id,
+        stage: targetStage,
+        authorName: "You",
+      });
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return;
+      }
+      invalidateAll();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   async function handleMoveStatus(task: Task, targetStatus: TaskStatus) {
     try {
@@ -780,6 +828,56 @@ function TasksBoardAndListShell({
                 </Pressable>
               </View>
 
+              {viewMode === "board" && projectStages.length > 0 ? (
+                <View
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+                >
+                  <Text
+                    style={{
+                      color: theme.colors.foregroundMuted,
+                      fontSize: 12,
+                    }}
+                  >
+                    Group by
+                  </Text>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      padding: 3,
+                      borderRadius: 8,
+                      backgroundColor: theme.colors.surface2,
+                    }}
+                  >
+                    {(["status", "stage"] as const).map((mode) => (
+                      <Pressable
+                        key={mode}
+                        accessibilityRole="button"
+                        onPress={() => setGroupBy(mode)}
+                        style={{
+                          paddingHorizontal: 10,
+                          paddingVertical: 4,
+                          borderRadius: 6,
+                          backgroundColor:
+                            groupBy === mode
+                              ? theme.colors.surface0
+                              : "transparent",
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: theme.colors.foreground,
+                            fontSize: 12,
+                            fontWeight: groupBy === mode ? "700" : "500",
+                          }}
+                        >
+                          {mode === "status" ? "Status" : "Stage"}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+
               {compact ? (
                 <Pressable
                   accessibilityRole="button"
@@ -1121,14 +1219,15 @@ function TasksBoardAndListShell({
                     gap: 12,
                   }}
                 >
-                  {visibleStatuses.map((status, statusIdx) => {
-                    const columnTasks = tasksByStatus.get(status) ?? [];
-                    const prevStatus = visibleStatuses[statusIdx - 1];
-                    const nextStatus = visibleStatuses[statusIdx + 1];
+                  {boardColumns.map((column, columnIdx) => {
+                    const { status } = column;
+                    const columnTasks = column.tasks;
+                    const prevColumn = boardColumns[columnIdx - 1];
+                    const nextColumn = boardColumns[columnIdx + 1];
 
                     return (
                       <View
-                        key={status}
+                        key={column.key}
                         style={{
                           width: compact ? 260 : 285,
                           borderRadius: 12,
@@ -1155,11 +1254,13 @@ function TasksBoardAndListShell({
                               gap: 6,
                             }}
                           >
-                            <StatusIcon
-                              status={status}
-                              theme={theme}
-                              size={14}
-                            />
+                            {status ? (
+                              <StatusIcon
+                                status={status}
+                                theme={theme}
+                                size={14}
+                              />
+                            ) : null}
                             <Text
                               style={{
                                 color: theme.colors.foreground,
@@ -1167,7 +1268,7 @@ function TasksBoardAndListShell({
                                 fontWeight: "700",
                               }}
                             >
-                              {STATUS_LABELS[status]}
+                              {column.label}
                             </Text>
                             <Text
                               style={{
@@ -1178,25 +1279,27 @@ function TasksBoardAndListShell({
                               {columnTasks.length}
                             </Text>
                           </View>
-                          <Pressable
-                            accessibilityRole="button"
-                            accessibilityLabel={`Add task to ${STATUS_LABELS[status]}`}
-                            onPress={() => {
-                              setNewTaskDefaultStatus(status);
-                              setNewTaskOpen(true);
-                            }}
-                            style={{
-                              padding: 4,
-                              borderRadius: 6,
-                              backgroundColor: theme.colors.surface2,
-                            }}
-                          >
-                            <Icon
-                              name="Plus"
-                              size={12}
-                              color={theme.colors.foreground}
-                            />
-                          </Pressable>
+                          {status ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Add task to ${column.label}`}
+                              onPress={() => {
+                                setNewTaskDefaultStatus(status);
+                                setNewTaskOpen(true);
+                              }}
+                              style={{
+                                padding: 4,
+                                borderRadius: 6,
+                                backgroundColor: theme.colors.surface2,
+                              }}
+                            >
+                              <Icon
+                                name="Plus"
+                                size={12}
+                                color={theme.colors.foreground}
+                              />
+                            </Pressable>
+                          ) : null}
                         </View>
 
                         <ScrollView
@@ -1260,6 +1363,34 @@ function TasksBoardAndListShell({
                                       theme={theme}
                                       size={12}
                                     />
+                                    {groupByStage ? (
+                                      <>
+                                        <StatusIcon
+                                          status={task.status}
+                                          theme={theme}
+                                          size={12}
+                                        />
+                                        <Text
+                                          numberOfLines={1}
+                                          style={{
+                                            color: theme.colors.foregroundMuted,
+                                            fontSize: 11,
+                                          }}
+                                        >
+                                          {STATUS_LABELS[task.status]}
+                                        </Text>
+                                      </>
+                                    ) : task.stage ? (
+                                      <Text
+                                        numberOfLines={1}
+                                        style={{
+                                          color: theme.colors.foregroundMuted,
+                                          fontSize: 11,
+                                        }}
+                                      >
+                                        {task.stage}
+                                      </Text>
+                                    ) : null}
                                   </View>
 
                                   <View
@@ -1269,15 +1400,20 @@ function TasksBoardAndListShell({
                                       gap: 4,
                                     }}
                                   >
-                                    {prevStatus ? (
+                                    {prevColumn ? (
                                       <Pressable
                                         accessibilityRole="button"
-                                        accessibilityLabel={`Move ${task.key} to ${STATUS_LABELS[prevStatus]}`}
+                                        accessibilityLabel={`Move ${task.key} to ${prevColumn.label}`}
                                         onPress={() =>
-                                          void handleMoveStatus(
-                                            task,
-                                            prevStatus,
-                                          )
+                                          void (prevColumn.status
+                                            ? handleMoveStatus(
+                                                task,
+                                                prevColumn.status,
+                                              )
+                                            : handleMoveStage(
+                                                task,
+                                                prevColumn.stage,
+                                              ))
                                         }
                                         style={{
                                           paddingHorizontal: 5,
@@ -1298,15 +1434,20 @@ function TasksBoardAndListShell({
                                         </Text>
                                       </Pressable>
                                     ) : null}
-                                    {nextStatus ? (
+                                    {nextColumn ? (
                                       <Pressable
                                         accessibilityRole="button"
-                                        accessibilityLabel={`Move ${task.key} to ${STATUS_LABELS[nextStatus]}`}
+                                        accessibilityLabel={`Move ${task.key} to ${nextColumn.label}`}
                                         onPress={() =>
-                                          void handleMoveStatus(
-                                            task,
-                                            nextStatus,
-                                          )
+                                          void (nextColumn.status
+                                            ? handleMoveStatus(
+                                                task,
+                                                nextColumn.status,
+                                              )
+                                            : handleMoveStage(
+                                                task,
+                                                nextColumn.stage,
+                                              ))
                                         }
                                         style={{
                                           paddingHorizontal: 5,

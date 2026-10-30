@@ -280,6 +280,75 @@ describe("paseo-plugin-tasks", () => {
     );
   });
 
+  it("tells a delegated agent about sessions already attached to the task", async () => {
+    const prod = domain.createProject({
+      name: "Product",
+      prefix: "PROD",
+      color: "blue",
+      linkedBbProjectId: "prj_demo123",
+    }).project;
+    const taskRes = domain.createTask({
+      projectId: prod.id,
+      title: "Ship analytics",
+      description: "",
+      status: "todo",
+      priority: "high",
+    });
+    if (!taskRes.ok) throw new Error("task not created");
+    store.tasks.upsertTaskThread({
+      taskId: taskRes.task.id,
+      threadId: "agent-earlier-1",
+      workspaceId: null,
+      presetName: "Manual",
+      title: "Earlier research session",
+      liveStatus: "idle",
+    });
+
+    await domain.delegate({
+      taskId: taskRes.task.id,
+      presetId: domain.listPresets().presets[0]!.id,
+    });
+
+    const prompt = createdAgents[0]?.prompt ?? "";
+    expect(prompt).toContain("## Attached agent sessions");
+    expect(prompt).toContain("agent-earlier-1 · Earlier research session (idle)");
+  });
+
+  it("names an agent comment by the preset of the session that wrote it", async () => {
+    const prod = domain.createProject({
+      name: "Product",
+      prefix: "PROD",
+      color: "blue",
+      linkedBbProjectId: "prj_demo123",
+    }).project;
+    const taskRes = domain.createTask({
+      projectId: prod.id,
+      title: "Ship analytics",
+      description: "",
+      status: "todo",
+      priority: "high",
+    });
+    if (!taskRes.ok) throw new Error("task not created");
+    store.tasks.upsertTaskThread({
+      taskId: taskRes.task.id,
+      threadId: "agent-lead-1",
+      workspaceId: null,
+      presetName: "Feature lead",
+      title: "PROD-1 · Ship analytics",
+      liveStatus: "idle",
+    });
+    await domain.createComment({
+      taskId: taskRes.task.id,
+      kind: "agent",
+      authorName: "agent (agent-lead-1)",
+      threadId: "agent-lead-1",
+      body: "Scope proposal ready.",
+    });
+
+    const { comments } = await domain.listComments({ taskId: taskRes.task.id }, null);
+    expect(comments.find((c) => c.kind === "agent")?.presetName).toBe("Feature lead");
+  });
+
   it("delegates a task to a Paseo worktree agent, tracks lifecycle transitions, and steers the agent on comment --notify", async () => {
     const prod = domain.createProject({
       name: "Product",
@@ -409,6 +478,157 @@ describe("paseo-plugin-tasks", () => {
       expect(domain.getTaskByKey({ taskKey: "TASKS-1" }).task?.status).toBe(
         "in_review",
       );
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it("migrates an existing database without changing its projects or tasks, with stages off", () => {
+    const project = domain.createProject({ name: "Legacy", prefix: "LEG", color: "blue" }).project;
+    const created = domain.createTask({ projectId: project.id, title: "Old task", status: "todo", priority: "high" });
+    if (!created.ok) throw new Error("task not created");
+    const dbPath = join(tempDir, "tasks.db");
+    store.db.exec(`
+      ALTER TABLE tasks DROP COLUMN stage;
+      ALTER TABLE projects DROP COLUMN stages;
+      DELETE FROM schema_version WHERE version = 6;
+    `);
+    store.db.close();
+
+    store = createApiStore(openTasksDatabase(dbPath), tempDir);
+    domain = createDomainHandlers(store, () => mockPaseo as never);
+    expect(domain.listProjects().projects).toEqual([{ ...project, nextTaskNumber: 2, stages: [] }]);
+    expect(domain.getTask({ taskId: created.task.id }).task).toEqual({ ...created.task, stage: null });
+    expect(domain.updateTask({ taskId: created.task.id, stage: "Build" })).toMatchObject({
+      ok: false,
+      error: { code: "stage_invalid" },
+    });
+  });
+
+  it("validates project stages", () => {
+    const project = domain.createProject({
+      name: "Feature",
+      prefix: "FEAT",
+      color: "blue",
+      stages: ["  Investigate ", "", "Spec", "Build"],
+    }).project;
+    expect(project.stages).toEqual(["Investigate", "Spec", "Build"]);
+    expect(() => domain.updateProject({ projectId: project.id, stages: ["Spec", "spec"] })).toThrow(/duplicate/i);
+    expect(() => domain.updateProject({ projectId: project.id, stages: ["x".repeat(41)] })).toThrow(/40/);
+    expect(() =>
+      domain.updateProject({ projectId: project.id, stages: Array.from({ length: 21 }, (_, i) => `S${i}`) }),
+    ).toThrow(/20/);
+    expect(() => domain.updateProject({ projectId: project.id, stages: ["None"] })).toThrow(/none/i);
+    expect(domain.updateProject({ projectId: project.id, name: "Feature 2" }).project.stages).toEqual([
+      "Investigate",
+      "Spec",
+      "Build",
+    ]);
+    expect(domain.updateProject({ projectId: project.id, stages: [] }).project.stages).toEqual([]);
+  });
+
+  it("sets, clears, and rejects task stages with a system comment for each change", async () => {
+    const project = domain.createProject({ name: "Feature", prefix: "FEAT", color: "blue", stages: ["Spec", "Build"] }).project;
+    const plain = domain.createProject({ name: "Plain", prefix: "PLN", color: "blue" }).project;
+    const created = domain.createTask({ projectId: project.id, title: "Feature", status: "todo" });
+    const plainTask = domain.createTask({ projectId: plain.id, title: "Plain", status: "todo" });
+    if (!created.ok || !plainTask.ok) throw new Error("task not created");
+    expect(created.task.stage).toBeNull();
+
+    const set = domain.updateTask({ taskId: created.task.id, stage: "build" });
+    expect(set).toMatchObject({ ok: true, task: { stage: "Build", status: "todo" } });
+    expect(domain.updateTask({ taskId: created.task.id, stage: "Build" }).ok).toBe(true);
+    expect(domain.updateTask({ taskId: created.task.id, stage: "Ship" })).toMatchObject({
+      ok: false,
+      error: { code: "stage_invalid", message: expect.stringContaining("Spec, Build") },
+    });
+    expect(domain.updateTask({ taskId: created.task.id, stage: null })).toMatchObject({ ok: true, task: { stage: null } });
+    expect(domain.updateTask({ taskId: plainTask.task.id, stage: "Spec" })).toMatchObject({
+      ok: false,
+      error: { code: "stage_invalid" },
+    });
+
+    const { comments } = await domain.listComments({ taskId: created.task.id });
+    expect(comments.filter((c) => c.kind === "system").map((c) => c.body)).toEqual([
+      "Stage changed to Build by You",
+      "Stage cleared by You",
+    ]);
+  });
+
+  it("keeps a stage when moving to a project that has it and clears it otherwise", async () => {
+    const a = domain.createProject({ name: "A", prefix: "AAA", color: "blue", stages: ["Spec", "Build"] }).project;
+    const b = domain.createProject({ name: "B", prefix: "BBB", color: "blue", stages: ["build"] }).project;
+    const c = domain.createProject({ name: "C", prefix: "CCC", color: "blue" }).project;
+    const created = domain.createTask({ projectId: a.id, title: "Feature", status: "todo" });
+    if (!created.ok) throw new Error("task not created");
+    domain.updateTask({ taskId: created.task.id, stage: "Build" });
+
+    expect(domain.moveTaskToProject({ taskId: created.task.id, projectId: b.id }).task.stage).toBe("build");
+    expect(domain.moveTaskToProject({ taskId: created.task.id, projectId: c.id }).task.stage).toBeNull();
+    const { comments } = await domain.listComments({ taskId: created.task.id });
+    expect(comments.at(-1)?.body).toBe("Stage cleared by You");
+  });
+
+  it("sets project stages and task stages from the CLI", async () => {
+    const created = await runTasksCli(
+      ["project", "create", "--name", "Feature", "--prefix", "FEAT", "--stages", "Investigate, Spec,Build"],
+      store,
+      domain,
+    );
+    expect(created.exitCode).toBe(0);
+    expect(created.stdout).toBe("Created project FEAT  Feature");
+    expect((await runTasksCli(["project", "show", "FEAT"], store, domain)).stdout).toMatch(
+      /^Stages\s+Investigate, Spec, Build$/m,
+    );
+    await runTasksCli(["project", "create", "--name", "Plain", "--prefix", "PLN"], store, domain);
+    expect((await runTasksCli(["project", "show", "PLN"], store, domain)).stdout).not.toMatch(/^Stages/m);
+
+    await runTasksCli(["create", "--project", "FEAT", "--title", "Ship it"], store, domain);
+    expect((await runTasksCli(["show", "FEAT-1"], store, domain)).stdout).not.toMatch(/^Stage\s/m);
+    const update = await runTasksCli(["update", "FEAT-1", "--stage", "spec"], store, domain);
+    expect(update).toMatchObject({ exitCode: 0, stdout: "Updated FEAT-1  Ship it" });
+    expect((await runTasksCli(["show", "FEAT-1"], store, domain)).stdout).toMatch(/^Stage\s+Spec$/m);
+    const invalid = await runTasksCli(["update", "FEAT-1", "--stage", "Ship"], store, domain);
+    expect(invalid.exitCode).not.toBe(0);
+    expect(invalid.stderr).toContain("Ship");
+    await runTasksCli(["update", "FEAT-1", "--stage", "none"], store, domain);
+    expect((await runTasksCli(["show", "FEAT-1"], store, domain)).stdout).not.toMatch(/^Stage\s/m);
+
+    expect((await runTasksCli(["project", "update", "FEAT", "--stages", ""], store, domain)).exitCode).toBe(0);
+    expect(domain.listProjects().projects.find((p) => p.prefix === "FEAT")?.stages).toEqual([]);
+    expect((await runTasksCli(["--help"], store, domain)).stdout).toContain("--stage");
+  });
+
+  it("sets and clears a stage through MCP tasks_update", async () => {
+    const project = domain.createProject({ name: "Feature", prefix: "FEAT", color: "blue", stages: ["Spec", "Build"] }).project;
+    domain.createTask({ projectId: project.id, title: "Ship it", status: "todo" });
+    const bridge = await startTasksBridge(store, domain);
+    const call = (name: string, args: Record<string, unknown>) =>
+      fetch(`${bridge.url}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${bridge.token}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+      }).then((r) => r.json());
+    try {
+      const tools = await fetch(`${bridge.url}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${bridge.token}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      }).then((r) => r.json());
+      const update = tools.result.tools.find((t: { name: string }) => t.name === "tasks_update");
+      expect(update.inputSchema.properties.stage).toBeDefined();
+
+      expect((await call("tasks_update", { key: "FEAT-1", stage: "build" })).result.isError).toBe(false);
+      expect(domain.getTaskByKey({ taskKey: "FEAT-1" }).task?.stage).toBe("Build");
+      expect((await call("tasks_update", { key: "FEAT-1", stage: "Ship" })).result.isError).toBe(true);
+      expect((await call("tasks_update", { key: "FEAT-1", stage: null })).result.isError).toBe(false);
+      expect(domain.getTaskByKey({ taskKey: "FEAT-1" }).task?.stage).toBeNull();
+      await call("tasks_update", { key: "FEAT-1", stage: "Spec" });
+      expect((await call("tasks_update", { key: "FEAT-1", stage: "none" })).result.isError).toBe(false);
+      expect(domain.getTaskByKey({ taskKey: "FEAT-1" }).task?.stage).toBeNull();
+
+      const projects = JSON.parse((await call("tasks_projects", {})).result.content[0].text);
+      expect(projects.projects[0].stages).toEqual(["Spec", "Build"]);
     } finally {
       await bridge.close();
     }

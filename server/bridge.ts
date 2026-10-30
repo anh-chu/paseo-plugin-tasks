@@ -156,6 +156,11 @@ const MCP_TOOLS = [
           type: "string",
           description: "YYYY-MM-DD or empty string to clear",
         },
+        stage: {
+          type: ["string", "null"],
+          description:
+            "One of the task project's stages (see tasks_projects); \"none\" or null clears",
+        },
       },
       required: ["key"],
       additionalProperties: false,
@@ -347,6 +352,11 @@ async function executeMcpToolCall(
       if (typeof args.dueDate === "string") {
         if (args.dueDate === "") argv.push("--no-due");
         else argv.push("--due", args.dueDate);
+      }
+      if (args.stage === null) {
+        argv.push("--stage", "none");
+      } else if (typeof args.stage === "string") {
+        argv.push("--stage", args.stage);
       }
       break;
     case "tasks_comment":

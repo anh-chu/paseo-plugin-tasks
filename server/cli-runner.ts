@@ -245,12 +245,12 @@ const HELP_TEXT = `Usage: paseo-tasks <command> [options]
 
 Commands:
   status                              Show the installed Tasks plugin name and version
-  project create|list|show|update     Manage tracker projects, prefixes, and Paseo project links
+  project create|list|show|update     Manage tracker projects, prefixes, Paseo project links, and stages (--stages "A,B,C", "" turns off)
   folder create|list|update|delete    Organize tracker projects into folders
   create                              Create a task (--project, --title, --description, --priority, --due, --label, --parent, --attach)
   list                                List and filter tasks (--project, --status, --priority, --label, --active, --search, --sort, --limit, --cursor)
   show <key-or-id>                    Show full task record, subtasks, comments, attachments, and attached agents
-  update <key-or-id>                  Update status, priority, title, description, due date, parent, or labels
+  update <key-or-id>                  Update status, priority, title, description, due date, parent, labels, or stage (--stage <name>, none clears)
   move <key-or-id>                    Move a task and its subtasks to --project
   comment <key-or-id>                 Add a Markdown comment (--body or --body-file, optional --notify)
   attachment add|get|list|remove      Manage task or comment file attachments
@@ -464,12 +464,14 @@ export async function runTasksCli(
           "paseo-project",
         ) ?? null;
       const color = getFlag(parsed, "color") ?? "blue";
+      const stages = getFlag(parsed, "stages");
       const result = domain.createProject({
         name,
         prefix: prefixFlag ? prefixFlag.trim().toUpperCase() : derivePrefix(name, projects),
         color,
         folderId: folder?.id ?? null,
         linkedBbProjectId: linked,
+        stages: stages === undefined ? [] : stages.split(","),
       });
       return {
         exitCode: 0,
@@ -522,6 +524,9 @@ export async function runTasksCli(
               ["Color", project.color],
               ["Folder", folder?.name ?? "-"],
               ["Paseo project", project.linkedBbProjectId ?? "-"],
+              ...(project.stages.length > 0
+                ? [["Stages", project.stages.join(", ")] as const]
+                : []),
               ["Next task", `${project.prefix}-${project.nextTaskNumber}`],
               ["Created", project.createdAt],
             ]),
@@ -539,6 +544,7 @@ export async function runTasksCli(
       const folderFlag = getFlag(parsed, "folder");
       const folder = folderFlag ? resolveFolder(domain, folderFlag) : undefined;
       const renamePrefix = getFlag(parsed, "rename-prefix");
+      const stages = getFlag(parsed, "stages");
       if (
         renamePrefix &&
         store.projectPrefixExists(renamePrefix.trim().toUpperCase(), project.id)
@@ -566,6 +572,7 @@ export async function runTasksCli(
                   "link-project",
                   "paseo-project",
                 ),
+          stages: stages === undefined ? undefined : stages.split(","),
         }),
       );
       return {
@@ -911,6 +918,7 @@ export async function runTasksCli(
             ["ID", task.id],
             ["Project", `${project.prefix} — ${project.name}`],
             ["Status", task.status],
+            ...(task.stage !== null ? [["Stage", task.stage] as const] : []),
             ["Priority", task.priority],
             ["Due", task.dueDate ?? "-"],
             ["Parent", task.parentTaskId ?? "-"],
@@ -1012,6 +1020,7 @@ export async function runTasksCli(
         nextLabels.delete(resolveLabel(labels, name).id);
       }
       const labelsChanged = addLabels.length > 0 || removeLabels.length > 0;
+      const stage = getFlag(parsed, "stage");
 
       const updated = domain.updateTask({
         taskId: task.id,
@@ -1024,6 +1033,10 @@ export async function runTasksCli(
           parentFlag === undefined && !noParent
             ? undefined
             : (parent?.id ?? null),
+        stage:
+          stage === undefined || stage.trim().toLowerCase() !== "none"
+            ? stage
+            : null,
         labelIds: labelsChanged ? [...nextLabels] : undefined,
         authorName: invokingThreadId ? `agent (${invokingThreadId})` : "cli",
       });

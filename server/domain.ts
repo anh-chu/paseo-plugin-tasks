@@ -375,6 +375,34 @@ function labelChangeBody(
     : `Labels changed to ${names.join(", ")} by ${authorName}`;
 }
 
+function resolveStage(
+  store: TasksApiStore,
+  projectId: string,
+  stage: string,
+): string {
+  const project = store.tasks.getProject(projectId);
+  if (!project) throw new Error(`Project not found: ${projectId}`);
+  if (project.stages.length === 0) {
+    fail("stage_invalid", `Project ${project.prefix} does not use stages`);
+  }
+  const match = project.stages.find(
+    (name) => name.toLowerCase() === stage.trim().toLowerCase(),
+  );
+  if (!match) {
+    fail(
+      "stage_invalid",
+      `Unknown stage "${stage}"; expected one of ${project.stages.join(", ")}`,
+    );
+  }
+  return match;
+}
+
+function stageChangeBody(stage: string | null, authorName: string): string {
+  return stage === null
+    ? `Stage cleared by ${authorName}`
+    : `Stage changed to ${stage} by ${authorName}`;
+}
+
 function writeSystemComments(
   store: TasksApiStore,
   taskId: string,
@@ -397,6 +425,7 @@ export interface SeedPromptInput {
   subtasks: readonly StoredTask[];
   attachments: readonly Pick<StoredAttachment, "id" | "fileName">[];
   recentComments: readonly StoredComment[];
+  threads: readonly Pick<TaskThread, "threadId" | "title" | "liveStatus">[];
   presetInstructions: string;
   extraInstructions?: string;
 }
@@ -425,6 +454,18 @@ function formatAttachments(
     .join("\n");
 }
 
+function formatThreads(
+  threads: readonly Pick<TaskThread, "threadId" | "title" | "liveStatus">[],
+): string {
+  if (threads.length === 0) return "None.";
+  return (
+    threads
+      .map((thread) => `- ${thread.threadId} · ${thread.title} (${thread.liveStatus})`)
+      .join("\n") +
+    "\n\nRead each session's history before you continue its work: Paseo MCP `get_agent_activity`, or `paseo logs <id>`."
+  );
+}
+
 function formatComments(comments: readonly StoredComment[]): string {
   if (comments.length === 0) return "None.";
   return comments
@@ -449,6 +490,7 @@ export function buildSeedPrompt(input: SeedPromptInput): string {
     markdownSection("Sub-tasks", formatSubtasks(input.subtasks)),
     markdownSection("Attachments", formatAttachments(input.attachments)),
     markdownSection("Recent comments", formatComments(input.recentComments)),
+    markdownSection("Attached agent sessions", formatThreads(input.threads)),
     markdownSection(
       "Report-back contract",
       `You are working on task ${input.task.key}. Use the \`paseo-tasks\` CLI (or \`bb tasks\` / MCP \`tasks_*\` tools): comment substantive updates (\`paseo-tasks comment ${input.task.key} --body "..."\`), attach result artifacts, and set status when done (\`paseo-tasks update ${input.task.key} --status in_review\`) or explain any blocker in a comment. Emit \`::task{key="${input.task.key}"}\` on its own line when referencing this task in your reply. Your agent session is already attached to the task.`,
@@ -757,6 +799,7 @@ export function createDomainHandlers(
       color: string;
       folderId?: string | null;
       linkedBbProjectId?: string | null;
+      stages?: string[];
     }) {
       const project = store.tasks.createProject(input);
       return { project };
@@ -767,6 +810,7 @@ export function createDomainHandlers(
       color?: string;
       folderId?: string | null;
       linkedBbProjectId?: string | null;
+      stages?: string[];
     }) {
       const { projectId, ...changes } = input;
       const project = store.tasks.updateProject(projectId, changes);
@@ -888,6 +932,7 @@ export function createDomainHandlers(
       priority?: StoredTask["priority"];
       dueDate?: string | null;
       parentTaskId?: string | null;
+      stage?: string | null;
       labelIds?: string[];
       authorName?: string;
     }) {
@@ -895,6 +940,10 @@ export function createDomainHandlers(
         const authorName = input.authorName ?? "You";
         const current = store.tasks.getTask(input.taskId);
         if (!current) throw new Error(`Task not found: ${input.taskId}`);
+        const stage =
+          input.stage === undefined || input.stage === null
+            ? input.stage
+            : resolveStage(store, current.projectId, input.stage);
         const parentTaskId =
           input.parentTaskId === undefined
             ? current.parentTaskId
@@ -915,6 +964,7 @@ export function createDomainHandlers(
             priority: input.priority,
             dueDate: input.dueDate,
             parentTaskId: input.parentTaskId,
+            stage,
           });
           if (input.labelIds) {
             replaceTaskLabels(store, current.id, input.labelIds);
@@ -925,6 +975,9 @@ export function createDomainHandlers(
             bodies.push(
               `Status changed to ${displayName(updated.status)} by ${authorName}`,
             );
+          }
+          if (updated.stage !== current.stage) {
+            bodies.push(stageChangeBody(updated.stage, authorName));
           }
           if (updated.priority !== current.priority) {
             bodies.push(
@@ -1022,6 +1075,12 @@ export function createDomainHandlers(
       const current = store.tasks.getTask(input.taskId);
       if (!current) throw new Error(`Task not found: ${input.taskId}`);
       const task = store.transaction(() => {
+        const previousStages = new Map(
+          [current, ...store.tasks.listSubtasks(current.id)].map((t) => [
+            t.id,
+            t.stage,
+          ]),
+        );
         const outcome = store.tasks.moveTaskToProject(
           current.id,
           input.projectId,
@@ -1029,6 +1088,9 @@ export function createDomainHandlers(
         for (const { previousKey, task: movedTask } of outcome.moved) {
           writeSystemComments(store, movedTask.id, authorName, [
             `Moved from ${previousKey} to ${movedTask.key} by ${authorName}`,
+            ...(previousStages.get(movedTask.id) !== movedTask.stage
+              ? [stageChangeBody(movedTask.stage, authorName)]
+              : []),
           ]);
         }
         return apiTask(store, outcome.task);
@@ -1125,6 +1187,12 @@ export function createDomainHandlers(
               : undefined;
           return {
             ...comment,
+            presetName:
+              comment.presetName ??
+              (comment.threadId
+                ? store.tasks.listTaskThreadsByThreadId(comment.threadId)[0]?.presetName
+                : null) ??
+              null,
             threadTitle: info?.title ?? null,
             provider: info?.provider ?? null,
           };
@@ -1337,6 +1405,7 @@ export function createDomainHandlers(
         subtasks: store.tasks.listSubtasks(task.id),
         attachments,
         recentComments,
+        threads: store.tasks.listTaskThreads(task.id),
         presetInstructions: preset.instructions,
         extraInstructions: input.extraInstructions,
       });

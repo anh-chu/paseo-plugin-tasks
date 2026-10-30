@@ -62,6 +62,7 @@ export const projectSchema = z
     color: z.string(),
     folderId: idSchema.nullable(),
     linkedBbProjectId: nonBlankStringSchema.nullable(),
+    stages: z.array(z.string()).default([]),
     createdAt: z.string(),
   })
   .strict();
@@ -78,6 +79,7 @@ export const taskSchema = z
     priority: taskPrioritySchema,
     dueDate: dueDateSchema.nullable(),
     parentTaskId: idSchema.nullable(),
+    stage: z.string().nullable().default(null),
     position: z.number(),
     createdAt: z.string(),
     updatedAt: z.string(),
@@ -188,6 +190,7 @@ export const tasksDomainErrorSchema = z
       "project_not_empty",
       "project_prefix_conflict",
       "attachment_referenced",
+      "stage_invalid",
     ]),
     message: z.string(),
   })
@@ -243,6 +246,7 @@ export const updateTaskInputSchema = z
     priority: taskPrioritySchema.optional(),
     dueDate: dueDateSchema.nullable().optional(),
     parentTaskId: idSchema.nullable().optional(),
+    stage: nonBlankStringSchema.nullable().optional(),
     labelIds: taskLabelsSchema.optional(),
     authorName: nonBlankStringSchema.default("You"),
   })
@@ -255,6 +259,7 @@ export const updateTaskInputSchema = z
       input.priority !== undefined ||
       input.dueDate !== undefined ||
       input.parentTaskId !== undefined ||
+      input.stage !== undefined ||
       input.labelIds !== undefined,
     { message: "at least one task field must be updated" },
   );
@@ -266,6 +271,7 @@ export const updateProjectInputSchema = z
     color: nonBlankStringSchema.optional(),
     folderId: idSchema.nullable().optional(),
     linkedBbProjectId: nonBlankStringSchema.nullable().optional(),
+    stages: z.array(z.string()).optional(),
   })
   .strict()
   .refine(
@@ -273,7 +279,8 @@ export const updateProjectInputSchema = z
       input.name !== undefined ||
       input.color !== undefined ||
       input.folderId !== undefined ||
-      input.linkedBbProjectId !== undefined,
+      input.linkedBbProjectId !== undefined ||
+      input.stages !== undefined,
     { message: "at least one project field must be updated" },
   );
 
@@ -396,6 +403,7 @@ export const createProjectRpc = defineRpc({
       color: nonBlankStringSchema,
       folderId: idSchema.nullable().default(null),
       linkedBbProjectId: nonBlankStringSchema.nullable().default(null),
+      stages: z.array(z.string()).default([]),
     })
     .strict(),
   output: z.object({ project: projectSchema }).strict(),

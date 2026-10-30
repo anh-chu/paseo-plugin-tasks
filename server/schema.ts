@@ -225,6 +225,10 @@ const MIGRATIONS = [
     );
     CREATE INDEX idx_task_key_aliases_task ON task_key_aliases(task_id);
   `,
+  `
+    ALTER TABLE projects ADD COLUMN stages TEXT;
+    ALTER TABLE tasks ADD COLUMN stage TEXT;
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {
