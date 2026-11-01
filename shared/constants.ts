@@ -122,6 +122,7 @@ You have access to the Paseo Tasks tracker via both the \`paseo-tasks\` CLI (als
 - Create a task: \`paseo-tasks create --project ABC --title "..." [--priority high]\` / MCP \`tasks_create\`
 - Update status/fields: \`paseo-tasks update ABC-12 --status in_review\` / MCP \`tasks_update\`
 - Change a task's stage only when your own instructions tell you to: \`paseo-tasks update ABC-12 --stage Build\`
+- Before in_review or done, comment **Evidence for \`ABC-12\`** — VERDICT, followed by nonempty **What ran** and **What was not covered** sections. VERDICT is PASS, PASS WITH GAPS, FAILED CHECK, NOTHING CHECKABLE, or BLOCKED. Describe failures and gaps for review. Done requires PASS, PASS WITH GAPS, or NOTHING CHECKABLE.
 - Comment at milestones: \`paseo-tasks comment ABC-12 --body "..." [--notify]\` / MCP \`tasks_comment\`
 - Attach or fetch files: \`paseo-tasks attachment add ABC-12 --file ./out.md\` and \`paseo-tasks attachment get <id> --out ./file\`
 - Attach/detach your agent session: \`paseo-tasks attach ABC-12\` and \`paseo-tasks detach ABC-12\`
