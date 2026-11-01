@@ -108,6 +108,7 @@ A comment sent with **Notify agent** is delivered to the agent that last replied
 | Inject Tasks reporting instructions | on | Appends the report-back contract to an agent's system prompt |
 | Default view | Board | Board or grouped list when the screen opens |
 | Show completed tasks on the board | on | Includes Done and Canceled columns |
+| Tell the parent task when a subtask's agent stops without reporting | off | When a subtask's agent ends a turn without commenting or changing the status, comments on the subtask and notifies the parent task's agent, once until that agent reports again |
 
 ## How it is built
 
@@ -115,7 +116,7 @@ A comment sent with **Notify agent** is delivered to the agent that last replied
 - **Bridge**: the plugin server serves a loopback HTTP endpoint with a random bearer token written to `$PASEO_HOME/plugin-data/tasks/bridge.json` (owner-only). It writes `paseo-tasks`, `bb-tasks`, `bb`, and `tasks-mcp.mjs` into `$PASEO_HOME/plugin-data/tasks/bin`. The CLI and MCP server refuse to run without the bridge, so the daemon is the single writer.
 - **Daemon connection**: if no Paseo API context has been received yet, delegation and attachment use the installed `paseo` CLI to connect to the local daemon. The CLI must be on the daemon's `PATH`.
 - **Agent wiring**: a `before` hook on agent creation injects the MCP server and the instructions; a `before` hook on session open prepends the bin directory to `PATH` and sets `BB_THREAD_ID` and `PASEO_TASK_KEY`.
-- **Lifecycle**: `agent.created`, `agent.turn_started`, `agent.turn_ended`, `agent.closed`, and `agent.archived` update the tracked state of each attached session. Closing or failing writes a system comment on the task. When an agent on a sub-task ends a turn without commenting or changing the status, the sub-task gets a system comment and the parent task's agent is notified. On load, sessions still shown as running are refreshed from Paseo.
+- **Lifecycle**: `agent.created`, `agent.turn_started`, `agent.turn_ended`, `agent.closed`, and `agent.archived` update the tracked state of each attached session. Closing or failing writes a system comment on the task. With the setting on, when an agent on a sub-task ends a turn without commenting or changing the status, the sub-task gets a system comment and the parent task's agent is notified, once until that agent reports again. On load, sessions still shown as running are refreshed from Paseo.
 
 ## Development
 

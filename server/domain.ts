@@ -2160,6 +2160,9 @@ function silentWorkerThreads(
     const task = store.tasks.getTask(thread.taskId);
     if (!task?.parentTaskId) return [];
     if (store.tasks.agentReportedSince(task.id, agentId, startedAt)) return [];
+    // Report a quiet agent once; again only after it has reported since.
+    const lastStop = store.tasks.lastSilentStopAt(task.id, agentId);
+    if (lastStop && !store.tasks.agentReportedSince(task.id, agentId, lastStop)) return [];
     return [{ thread, task, parentTaskId: task.parentTaskId }];
   });
 }
@@ -2276,6 +2279,7 @@ export function registerLifecycleHooks(
   server: PluginServerContext,
   store: TasksApiStore,
   onPaseoCaptured: (paseo: PaseoApi) => void,
+  reportSilentStops: () => Promise<boolean> = async () => false,
 ): void {
   server.on("agent.created", ({ agent }, { paseo }) => {
     onPaseoCaptured(paseo);
@@ -2293,7 +2297,9 @@ export function registerLifecycleHooks(
 
   server.on("agent.turn_ended", async ({ agent, outcome, timeline }, { paseo }) => {
     onPaseoCaptured(paseo);
-    const silent = silentWorkerThreads(store, agent.id);
+    const silent = (await reportSilentStops())
+      ? silentWorkerThreads(store, agent.id)
+      : [];
     if (outcome.kind === "failed") {
       transitionTrackedThread(store, agent.id, "failed");
     } else {

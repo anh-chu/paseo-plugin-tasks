@@ -275,6 +275,16 @@ export function TasksSettingsScreen({ theme }: PluginSurfaceProps) {
               )
             }
           />
+          <SettingsSwitch
+            label="Tell the parent task when a subtask's agent stops without reporting"
+            value={values.reportSilentSubtaskAgents}
+            onValueChange={(next) =>
+              void settings.save(
+                { ...values, reportSilentSubtaskAgents: next },
+                revision,
+              )
+            }
+          />
         </SettingsCard>
       </SettingsSection>
 

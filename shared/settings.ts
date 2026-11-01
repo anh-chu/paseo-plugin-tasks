@@ -11,6 +11,7 @@ export const tasksSettings = defineSettings({
     defaultView: z.enum(["list", "board"]).default("board"),
     showCompletedInBoard: z.boolean().default(true),
     collapsedBoardColumns: z.array(z.string()).default([]),
+    reportSilentSubtaskAgents: z.boolean().default(false),
   }),
 });
 

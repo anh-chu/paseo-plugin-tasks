@@ -1859,6 +1859,22 @@ export function createTasksStore(db: PluginDatabase) {
     return row.turn_started_at;
   }
 
+  function lastSilentStopAt(taskId: string, threadId: string): string | null {
+    return (
+      db
+        .prepare<[string, string], { created_at: string }>(
+          `
+          SELECT created_at FROM comments
+          WHERE task_id = ? AND thread_id = ? AND kind = 'system'
+            AND body LIKE '% stopped without reporting.%'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        )
+        .get(taskId, threadId)?.created_at ?? null
+    );
+  }
+
   function getTaskThreadHeartbeatId(id: string): string | null {
     return (
       db
@@ -2094,6 +2110,7 @@ export function createTasksStore(db: PluginDatabase) {
     listUnfinishedTaskThreads,
     setTaskThreadTurnStartedAt,
     takeTaskThreadTurnStartedAt,
+    lastSilentStopAt,
     getTaskThreadHeartbeatId,
     setTaskThreadHeartbeatId,
     agentReportedSince,

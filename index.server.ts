@@ -186,7 +186,10 @@ export default function contribute(server: PluginServerContext) {
     };
   });
 
-  registerLifecycleHooks(server, store, capturePaseo);
+  registerLifecycleHooks(server, store, capturePaseo, async () => {
+    const current = await settings.read();
+    return current.status === "ready" && current.values.reportSilentSubtaskAgents;
+  });
 
   // Folder handlers
   server.handle(createFolderRpc, (input, { paseo }) => {

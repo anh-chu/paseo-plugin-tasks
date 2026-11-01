@@ -660,7 +660,40 @@ describe("paseo-plugin-tasks", () => {
 
     beforeEach(() => {
       hooks.clear();
-      registerLifecycleHooks({ on: (name: string, handler: Handler) => hooks.set(name, handler) } as never, store, () => {});
+      registerLifecycleHooks({ on: (name: string, handler: Handler) => hooks.set(name, handler) } as never, store, () => {}, async () => reportingOn);
+    });
+    let reportingOn = true;
+    afterEach(() => {
+      reportingOn = true;
+    });
+
+    it("reports nothing when the setting is off", async () => {
+      reportingOn = false;
+      const { parent, sub } = setupLeadAndWorker();
+      await fire("agent.turn_started", { agent: agentRef("agent-worker"), turnId: "t" });
+      await fire("agent.turn_ended", { agent: agentRef("agent-worker"), turnId: "t", outcome: { kind: "completed" }, timeline: [] });
+      expect((await systemBodies(sub.id)).some((b) => b.includes("stopped without reporting"))).toBe(false);
+      expect((await systemBodies(parent.id)).some((b) => b.includes("stopped without reporting"))).toBe(false);
+      expect(sentPrompts).toHaveLength(0);
+    });
+
+    it("reports a quiet worker once until it reports again", async () => {
+      const { sub } = setupLeadAndWorker();
+      const turn = async () => {
+        await fire("agent.turn_started", { agent: agentRef("agent-worker"), turnId: "t" });
+        await fire("agent.turn_ended", { agent: agentRef("agent-worker"), turnId: "t", outcome: { kind: "completed" }, timeline: [] });
+      };
+      const stops = async () => (await systemBodies(sub.id)).filter((b) => b.includes("stopped without reporting")).length;
+
+      await turn();
+      await turn();
+      expect(await stops()).toBe(1);
+      expect(sentPrompts).toHaveLength(1);
+
+      await runTasksCli(["comment", sub.key, "--body", "Back on it"], store, domain, { threadId: "agent-worker" });
+      await turn();
+      expect(await stops()).toBe(2);
+      expect(sentPrompts).toHaveLength(2);
     });
 
     it("comments and wakes the lead when a worker stops without reporting, once per turn", async () => {
