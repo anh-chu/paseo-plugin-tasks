@@ -10,6 +10,9 @@ export const tasksSettings = defineSettings({
     autoInjectInstructions: z.boolean().default(true),
     defaultView: z.enum(["list", "board"]).default("board"),
     showCompletedInBoard: z.boolean().default(true),
+    collapsedBoardColumns: z.array(z.string()).default([]),
+    reportSilentSubtaskAgents: z.boolean().default(false),
+    requireReviewEvidence: z.boolean().default(false),
   }),
 });
 

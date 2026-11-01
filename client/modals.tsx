@@ -42,6 +42,13 @@ import {
 } from "../shared/contract";
 import { LabelPill, ProjectDot } from "./badges";
 
+const CHECK_IN_OPTIONS = [
+  [null, "Off"],
+  ["0 * * * *", "Every hour"],
+  ["0 9 * * 1-5", "Weekdays at 9:00"],
+  ["0 9 * * *", "Every day at 9:00"],
+] as const;
+
 export function NewTaskModal({
   open,
   onOpenChange,
@@ -502,6 +509,8 @@ export function ManageModal({
   const [projColor, setProjColor] = useState<string>("blue");
   const [projFolderId, setProjFolderId] = useState<string | null>(null);
   const [projLinkedId, setProjLinkedId] = useState<string | null>(null);
+  const [projStages, setProjStages] = useState("");
+  const [stageDrafts, setStageDrafts] = useState<Record<string, string>>({});
   const [newFolderName, setNewFolderName] = useState("");
 
   // Selected project for label management
@@ -533,6 +542,7 @@ export function ManageModal({
   const [presetEnvironment, setPresetEnvironment] =
     useState<PresetEnvironmentKind>("new-worktree");
   const [presetBaseBranch, setPresetBaseBranch] = useState("");
+  const [presetCheckIn, setPresetCheckIn] = useState<string | null>(null);
   const [presetInstructions, setPresetInstructions] = useState("");
 
   const invalidateAll = () => {
@@ -558,9 +568,11 @@ export function ManageModal({
         color: projColor,
         folderId: projFolderId,
         linkedBbProjectId: projLinkedId,
+        stages: projStages.split(/[,\n]/),
       });
       setProjName("");
       setProjPrefix("");
+      setProjStages("");
       invalidateAll();
       toast.show(`Created project ${res.project.prefix}`, {
         variant: "success",
@@ -588,6 +600,25 @@ export function ManageModal({
     }
   }
 
+  async function handleSaveStages(project: Project) {
+    const draft = stageDrafts[project.id];
+    if (draft === undefined) return;
+    const stages = draft
+      .split(/[,\n]/)
+      .map((stage) => stage.trim())
+      .filter(Boolean);
+    try {
+      if (stages.join("\n") !== project.stages.join("\n")) {
+        await updateProject({ projectId: project.id, stages });
+        invalidateAll();
+        toast.show(`Updated ${project.prefix} stages`, { variant: "success" });
+      }
+      setStageDrafts(({ [project.id]: _, ...rest }) => rest);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function handleCreatePreset() {
     if (!presetName.trim() || !presetProvider.trim() || !presetModel.trim()) {
       toast.error("Preset name, provider, and model are required");
@@ -607,6 +638,7 @@ export function ManageModal({
             ? presetBaseBranch.trim()
             : null,
         machineId: null,
+        checkIn: presetCheckIn,
         instructions: presetInstructions,
       });
       setPresetName("");
@@ -836,6 +868,34 @@ export function ManageModal({
                         })}
                       </View>
                     </View>
+
+                    <View style={{ gap: 4 }}>
+                      <Text
+                        style={{
+                          color: theme.colors.foregroundMuted,
+                          fontSize: 11,
+                        }}
+                      >
+                        Stages
+                      </Text>
+                      <TextInput
+                        value={stageDrafts[p.id] ?? p.stages.join(", ")}
+                        onChangeText={(text) =>
+                          setStageDrafts((prev) => ({ ...prev, [p.id]: text }))
+                        }
+                        onBlur={() => void handleSaveStages(p)}
+                        placeholder="Investigate, Spec, Build"
+                        placeholderTextColor={theme.colors.foregroundMuted}
+                        style={{
+                          paddingHorizontal: 10,
+                          paddingVertical: 6,
+                          borderRadius: 6,
+                          backgroundColor: theme.colors.surface1,
+                          color: theme.colors.foreground,
+                          fontSize: 12,
+                        }}
+                      />
+                    </View>
                   </View>
                 ))}
               </View>
@@ -892,6 +952,21 @@ export function ManageModal({
                     }}
                   />
                 </View>
+
+                <TextInput
+                  value={projStages}
+                  onChangeText={setProjStages}
+                  placeholder="Stages (Investigate, Spec, Build)"
+                  placeholderTextColor={theme.colors.foregroundMuted}
+                  style={{
+                    paddingHorizontal: 10,
+                    paddingVertical: 8,
+                    borderRadius: 8,
+                    backgroundColor: theme.colors.surface2,
+                    color: theme.colors.foreground,
+                    fontSize: 13,
+                  }}
+                />
 
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
                   {PROJECT_COLORS.map((color) => (
@@ -1339,6 +1414,13 @@ export function ManageModal({
                     {preset.environmentKind === "new-worktree"
                       ? `worktree${preset.baseBranch ? ` (${preset.baseBranch})` : ""}`
                       : "project-default"}
+                    {preset.checkIn
+                      ? ` · check-in: ${
+                          CHECK_IN_OPTIONS.find(
+                            ([cron]) => cron === preset.checkIn,
+                          )?.[1] ?? preset.checkIn
+                        }`
+                      : ""}
                   </Text>
                   {preset.instructions ? (
                     <Text
@@ -1575,6 +1657,37 @@ export function ManageModal({
                     }}
                   />
                 ) : null}
+
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+                  {CHECK_IN_OPTIONS.map(([cron, label]) => (
+                    <Pressable
+                      key={label}
+                      accessibilityRole="button"
+                      onPress={() => setPresetCheckIn(cron)}
+                      style={{
+                        paddingHorizontal: 8,
+                        paddingVertical: 4,
+                        borderRadius: 6,
+                        backgroundColor:
+                          presetCheckIn === cron
+                            ? theme.colors.accent
+                            : theme.colors.surface2,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color:
+                            presetCheckIn === cron
+                              ? theme.colors.accentForeground
+                              : theme.colors.foreground,
+                          fontSize: 11,
+                        }}
+                      >
+                        Check-in: {label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
 
                 <TextInput
                   value={presetInstructions}

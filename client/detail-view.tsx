@@ -285,6 +285,7 @@ export function TaskDetailView({
   async function handleQuickUpdate(
     patch: Partial<{
       status: TaskStatus;
+      stage: string | null;
       priority: TaskPriority;
       dueDate: string | null;
       labelIds: string[];
@@ -748,6 +749,54 @@ export function TaskDetailView({
             })}
           </View>
         </View>
+
+        {currentProject && currentProject.stages.length > 0 ? (
+          <View style={{ gap: 6 }}>
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, fontWeight: "600" }}>
+              STAGE
+            </Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+              {[
+                null,
+                ...currentProject.stages,
+                ...(task.stage !== null && !currentProject.stages.includes(task.stage)
+                  ? [task.stage]
+                  : []),
+              ].map((stage) => {
+                const active = task.stage === stage;
+                return (
+                  <Pressable
+                    key={stage ?? ""}
+                    accessibilityRole="button"
+                    onPress={() => {
+                      if (!active) void handleQuickUpdate({ stage });
+                    }}
+                    style={{
+                      paddingHorizontal: 9,
+                      paddingVertical: 5,
+                      borderRadius: 999,
+                      backgroundColor: active
+                        ? theme.colors.accent
+                        : theme.colors.surface2,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        color: active
+                          ? theme.colors.accentForeground
+                          : theme.colors.foreground,
+                        fontSize: 11,
+                        fontWeight: active ? "700" : "500",
+                      }}
+                    >
+                      {stage ?? "None"}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        ) : null}
 
         <View style={{ gap: 6 }}>
           <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, fontWeight: "600" }}>
@@ -1644,6 +1693,13 @@ export function TaskDetailView({
         {comments.map((comment) => {
           const isSystem = comment.kind === "system";
           const isAgent = comment.kind === "agent";
+          // A comment from another task's agent (a subtask worker) names that task.
+          const fromKey = comment.threadTitle?.match(/^([A-Z][A-Z0-9]*-\d+) · /)?.[1];
+          const author = isAgent
+            ? [fromKey && fromKey !== task.key ? fromKey : null, comment.presetName ?? comment.authorName]
+                .filter(Boolean)
+                .join(" · ")
+            : comment.authorName;
           return (
             <View
               key={comment.id}
@@ -1653,10 +1709,6 @@ export function TaskDetailView({
                 backgroundColor: isSystem
                   ? theme.colors.surface0
                   : theme.colors.surface2,
-                borderLeftWidth: isAgent ? 3 : 0,
-                borderLeftColor: isAgent
-                  ? theme.colors.accent
-                  : theme.colors.border,
                 gap: 4,
               }}
             >
@@ -1669,10 +1721,12 @@ export function TaskDetailView({
                 }}
               >
                 <View
-                  style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1, minWidth: 0 }}
                 >
                   <Text
+                    numberOfLines={1}
                     style={{
+                      flexShrink: 1,
                       color: isSystem
                         ? theme.colors.foregroundMuted
                         : theme.colors.foreground,
@@ -1680,19 +1734,8 @@ export function TaskDetailView({
                       fontWeight: "700",
                     }}
                   >
-                    {comment.threadTitle ?? comment.authorName}
+                    {author}
                   </Text>
-                  {comment.provider ? (
-                    <Text
-                      style={{
-                        color: theme.colors.accent,
-                        fontSize: 10,
-                        fontWeight: "600",
-                      }}
-                    >
-                      {comment.provider.name}
-                    </Text>
-                  ) : null}
                   {comment.notifiedCount > 0 ? (
                     <Text
                       style={{
@@ -1707,6 +1750,7 @@ export function TaskDetailView({
                 </View>
                 <Text
                   style={{
+                    flexShrink: 0,
                     color: theme.colors.foregroundMuted,
                     fontSize: 11,
                   }}

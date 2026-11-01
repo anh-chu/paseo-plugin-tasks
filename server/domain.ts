@@ -1,6 +1,9 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 type PaseoApi = PluginHandlerContext["paseo"];
-import type { PluginServerContext } from "@getpaseo/plugin/server";
+import type {
+  PluginLifecycleEvents,
+  PluginServerContext,
+} from "@getpaseo/plugin/server";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
@@ -43,6 +46,7 @@ const MAX_DELEGATED_THREAD_TITLE_WIDTH = 120;
 const SYSTEM_AUTHOR_NAME = "Tasks";
 const MANUAL_PRESET_NAME = "Attached";
 const RECENT_COMMENT_LIMIT = 5;
+const STOP_EXCERPT_LENGTH = 300;
 
 interface TaskLabelIdRow {
   task_id: string;
@@ -375,6 +379,34 @@ function labelChangeBody(
     : `Labels changed to ${names.join(", ")} by ${authorName}`;
 }
 
+function resolveStage(
+  store: TasksApiStore,
+  projectId: string,
+  stage: string,
+): string {
+  const project = store.tasks.getProject(projectId);
+  if (!project) throw new Error(`Project not found: ${projectId}`);
+  if (project.stages.length === 0) {
+    fail("stage_invalid", `Project ${project.prefix} does not use stages`);
+  }
+  const match = project.stages.find(
+    (name) => name.toLowerCase() === stage.trim().toLowerCase(),
+  );
+  if (!match) {
+    fail(
+      "stage_invalid",
+      `Unknown stage "${stage}"; expected one of ${project.stages.join(", ")}`,
+    );
+  }
+  return match;
+}
+
+function stageChangeBody(stage: string | null, authorName: string): string {
+  return stage === null
+    ? `Stage cleared by ${authorName}`
+    : `Stage changed to ${stage} by ${authorName}`;
+}
+
 function writeSystemComments(
   store: TasksApiStore,
   taskId: string,
@@ -397,6 +429,8 @@ export interface SeedPromptInput {
   subtasks: readonly StoredTask[];
   attachments: readonly Pick<StoredAttachment, "id" | "fileName">[];
   recentComments: readonly StoredComment[];
+  threads: readonly Pick<TaskThread, "threadId" | "title" | "liveStatus">[];
+  requireEvidence?: boolean;
   presetInstructions: string;
   extraInstructions?: string;
 }
@@ -425,6 +459,18 @@ function formatAttachments(
     .join("\n");
 }
 
+function formatThreads(
+  threads: readonly Pick<TaskThread, "threadId" | "title" | "liveStatus">[],
+): string {
+  if (threads.length === 0) return "None.";
+  return (
+    threads
+      .map((thread) => `- ${thread.threadId} · ${thread.title} (${thread.liveStatus})`)
+      .join("\n") +
+    "\n\nRead each session's history before you continue its work: Paseo MCP `get_agent_activity`, or `paseo logs <id>`."
+  );
+}
+
 function formatComments(comments: readonly StoredComment[]): string {
   if (comments.length === 0) return "None.";
   return comments
@@ -449,10 +495,11 @@ export function buildSeedPrompt(input: SeedPromptInput): string {
     markdownSection("Sub-tasks", formatSubtasks(input.subtasks)),
     markdownSection("Attachments", formatAttachments(input.attachments)),
     markdownSection("Recent comments", formatComments(input.recentComments)),
+    markdownSection("Attached agent sessions", formatThreads(input.threads)),
     markdownSection(
       "Report-back contract",
-      `You are working on task ${input.task.key}. Use the \`paseo-tasks\` CLI (or \`bb tasks\` / MCP \`tasks_*\` tools): comment substantive updates (\`paseo-tasks comment ${input.task.key} --body "..."\`), attach result artifacts, and set status when done (\`paseo-tasks update ${input.task.key} --status in_review\`) or explain any blocker in a comment. Emit \`::task{key="${input.task.key}"}\` on its own line when referencing this task in your reply. Your agent session is already attached to the task.\n\n` +
-      `Before moving this task to in_review or done, add a comment headed **Evidence for \`${input.task.key}\`** — VERDICT, followed by nonempty **What ran** and **What was not covered** sections. Choose PASS, PASS WITH GAPS, FAILED CHECK, NOTHING CHECKABLE, or BLOCKED. Explain failures and gaps so a person can review them. Done requires PASS, PASS WITH GAPS, or NOTHING CHECKABLE.`,
+      `You are working on task ${input.task.key}. Use the \`paseo-tasks\` CLI (or \`bb tasks\` / MCP \`tasks_*\` tools): comment substantive updates (\`paseo-tasks comment ${input.task.key} --body "..."\`), attach result artifacts, and set status when done (\`paseo-tasks update ${input.task.key} --status in_review\`) or explain any blocker in a comment. Emit \`::task{key="${input.task.key}"}\` on its own line when referencing this task in your reply. Your agent session is already attached to the task.` +
+      (input.requireEvidence ? `\n\nBefore moving this task to in_review or done, add a comment headed **Evidence for \`${input.task.key}\`** — VERDICT, followed by nonempty **What ran** and **What was not covered** sections. Choose PASS, PASS WITH GAPS, FAILED CHECK, NOTHING CHECKABLE, or BLOCKED. Explain failures and gaps so a person can review them. Done requires PASS, PASS WITH GAPS, or NOTHING CHECKABLE.` : ""),
     ),
   ];
 
@@ -725,11 +772,102 @@ async function lookupPullRequestForCwd(
   }
 }
 
+export type PaseoCliRunner = (
+  args: readonly string[],
+  env: Record<string, string>,
+) => Promise<string>;
+
+export const runPaseoCli: PaseoCliRunner = async (args, env) =>
+  (
+    await execFileAsync("paseo", [...args], {
+      env: { ...process.env, ...env },
+      timeout: 15_000,
+    })
+  ).stdout;
+
+function cliErrorMessage(error: unknown): string {
+  const stderr = (error as { stderr?: unknown } | null)?.stderr;
+  if (typeof stderr === "string" && stderr.trim()) return stderr.trim();
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function createCheckInHeartbeat(
+  runCli: PaseoCliRunner,
+  agentId: string,
+  cron: string,
+  taskKey: string,
+): Promise<string> {
+  const stdout = await runCli(
+    [
+      "heartbeat",
+      "create",
+      `--cron=${cron}`,
+      `--timezone=${Intl.DateTimeFormat().resolvedOptions().timeZone}`,
+      `--name=Check-in ${taskKey}`,
+      "--json",
+      "--",
+      `Check-in: follow the Check-ins section of your instructions for ${taskKey}.`,
+    ],
+    { PASEO_AGENT_ID: agentId },
+  );
+  const id = (JSON.parse(stdout) as { id?: unknown }).id;
+  if (typeof id !== "string" || !id) {
+    throw new Error("paseo heartbeat create returned no heartbeat ID");
+  }
+  return id;
+}
+
+async function deleteCheckInHeartbeat(
+  store: TasksApiStore,
+  runCli: PaseoCliRunner,
+  thread: Pick<TaskThread, "taskId" | "threadId" | "presetName">,
+  heartbeatId: string,
+): Promise<void> {
+  try {
+    await runCli(["heartbeat", "delete", heartbeatId], {
+      PASEO_AGENT_ID: thread.threadId,
+    });
+  } catch (error) {
+    const body = `Check-in could not be removed: ${cliErrorMessage(error)}`;
+    if (!store.tasks.getTask(thread.taskId)) {
+      console.warn(`${body} (heartbeat ${heartbeatId})`);
+      return;
+    }
+    store.tasks.createComment({
+      taskId: thread.taskId,
+      kind: "system",
+      authorName: SYSTEM_AUTHOR_NAME,
+      presetName: thread.presetName,
+      threadId: thread.threadId,
+      body,
+    });
+  }
+}
+
+// Clears each thread's heartbeat synchronously, so it is deleted only once,
+// then deletes it in Paseo.
+function releaseCheckInHeartbeats(
+  store: TasksApiStore,
+  runCli: PaseoCliRunner,
+  threads: readonly TaskThread[],
+): Promise<void> {
+  const pending = threads.flatMap((thread) => {
+    const heartbeatId = store.tasks.getTaskThreadHeartbeatId(thread.id);
+    if (!heartbeatId) return [];
+    store.tasks.setTaskThreadHeartbeatId(thread.id, null);
+    return [deleteCheckInHeartbeat(store, runCli, thread, heartbeatId)];
+  });
+  return Promise.all(pending).then(() => undefined);
+}
+
 export function createDomainHandlers(
   store: TasksApiStore,
   getPaseo: () => PaseoApi | null,
+  runCli: PaseoCliRunner = runPaseoCli,
+  requireEvidence: () => Promise<boolean> = async () => false,
 ) {
   return {
+    requireEvidence,
     createFolder(input: { name: string; parentFolderId?: string | null }) {
       const folder = store.tasks.createFolder(input);
       return { folder };
@@ -758,6 +896,7 @@ export function createDomainHandlers(
       color: string;
       folderId?: string | null;
       linkedBbProjectId?: string | null;
+      stages?: string[];
     }) {
       const project = store.tasks.createProject(input);
       return { project };
@@ -768,6 +907,7 @@ export function createDomainHandlers(
       color?: string;
       folderId?: string | null;
       linkedBbProjectId?: string | null;
+      stages?: string[];
     }) {
       const { projectId, ...changes } = input;
       const project = store.tasks.updateProject(projectId, changes);
@@ -802,6 +942,11 @@ export function createDomainHandlers(
           .listTasks({ projectId: input.projectId })
           .map((task) => task.id);
         const attachments = attachmentsForTasks(store.tasks, taskIds);
+        void releaseCheckInHeartbeats(
+          store,
+          runCli,
+          taskIds.flatMap((taskId) => store.tasks.listTaskThreads(taskId)),
+        );
         const deleted = store.tasks.deleteProject(input.projectId);
         if (deleted) {
           await removeAttachmentBlobs(store.dataDir, attachments);
@@ -889,6 +1034,7 @@ export function createDomainHandlers(
       priority?: StoredTask["priority"];
       dueDate?: string | null;
       parentTaskId?: string | null;
+      stage?: string | null;
       labelIds?: string[];
       authorName?: string;
     }) {
@@ -896,6 +1042,10 @@ export function createDomainHandlers(
         const authorName = input.authorName ?? "You";
         const current = store.tasks.getTask(input.taskId);
         if (!current) throw new Error(`Task not found: ${input.taskId}`);
+        const stage =
+          input.stage === undefined || input.stage === null
+            ? input.stage
+            : resolveStage(store, current.projectId, input.stage);
         const parentTaskId =
           input.parentTaskId === undefined
             ? current.parentTaskId
@@ -916,6 +1066,7 @@ export function createDomainHandlers(
             priority: input.priority,
             dueDate: input.dueDate,
             parentTaskId: input.parentTaskId,
+            stage,
           });
           if (input.labelIds) {
             replaceTaskLabels(store, current.id, input.labelIds);
@@ -926,6 +1077,9 @@ export function createDomainHandlers(
             bodies.push(
               `Status changed to ${displayName(updated.status)} by ${authorName}`,
             );
+          }
+          if (updated.stage !== current.stage) {
+            bodies.push(stageChangeBody(updated.stage, authorName));
           }
           if (updated.priority !== current.priority) {
             bodies.push(
@@ -945,6 +1099,16 @@ export function createDomainHandlers(
           writeSystemComments(store, current.id, authorName, bodies);
           return apiTask(store, updated);
         });
+        if (
+          result.status !== current.status &&
+          (result.status === "done" || result.status === "canceled")
+        ) {
+          void releaseCheckInHeartbeats(
+            store,
+            runCli,
+            store.tasks.listTaskThreads(current.id),
+          );
+        }
 
         return { ok: true as const, task: result };
       } catch (error) {
@@ -954,6 +1118,11 @@ export function createDomainHandlers(
     },
     async deleteTask(input: { taskId: string }) {
       const attachments = attachmentsForTasks(store.tasks, [input.taskId]);
+      void releaseCheckInHeartbeats(
+        store,
+        runCli,
+        store.tasks.listTaskThreads(input.taskId),
+      );
       const deleted = store.tasks.deleteTask(input.taskId);
       if (deleted) {
         await removeAttachmentBlobs(store.dataDir, attachments);
@@ -1012,6 +1181,16 @@ export function createDomainHandlers(
         }
         return apiTask(store, moved);
       });
+      if (
+        task.status !== current.status &&
+        (task.status === "done" || task.status === "canceled")
+      ) {
+        void releaseCheckInHeartbeats(
+          store,
+          runCli,
+          store.tasks.listTaskThreads(current.id),
+        );
+      }
       return { ok: true as const, task };
     },
     moveTaskToProject(input: {
@@ -1023,6 +1202,12 @@ export function createDomainHandlers(
       const current = store.tasks.getTask(input.taskId);
       if (!current) throw new Error(`Task not found: ${input.taskId}`);
       const task = store.transaction(() => {
+        const previousStages = new Map(
+          [current, ...store.tasks.listSubtasks(current.id)].map((t) => [
+            t.id,
+            t.stage,
+          ]),
+        );
         const outcome = store.tasks.moveTaskToProject(
           current.id,
           input.projectId,
@@ -1030,6 +1215,9 @@ export function createDomainHandlers(
         for (const { previousKey, task: movedTask } of outcome.moved) {
           writeSystemComments(store, movedTask.id, authorName, [
             `Moved from ${previousKey} to ${movedTask.key} by ${authorName}`,
+            ...(previousStages.get(movedTask.id) !== movedTask.stage
+              ? [stageChangeBody(movedTask.stage, authorName)]
+              : []),
           ]);
         }
         return apiTask(store, outcome.task);
@@ -1126,6 +1314,12 @@ export function createDomainHandlers(
               : undefined;
           return {
             ...comment,
+            presetName:
+              comment.presetName ??
+              (comment.threadId
+                ? store.tasks.listTaskThreadsByThreadId(comment.threadId)[0]?.presetName
+                : null) ??
+              null,
             threadTitle: info?.title ?? null,
             provider: info?.provider ?? null,
           };
@@ -1338,6 +1532,8 @@ export function createDomainHandlers(
         subtasks: store.tasks.listSubtasks(task.id),
         attachments,
         recentComments,
+        threads: store.tasks.listTaskThreads(task.id),
+        requireEvidence: await requireEvidence(),
         presetInstructions: preset.instructions,
         extraInstructions: input.extraInstructions,
       });
@@ -1345,6 +1541,7 @@ export function createDomainHandlers(
       const useWorktree =
         preset.environmentKind === "new-worktree" &&
         targetProject.projectKind === "git";
+      const dispatchedAt = new Date().toISOString();
 
       const workspace = await paseo.workspaces.create({
         title,
@@ -1392,8 +1589,8 @@ export function createDomainHandlers(
         },
       });
 
-      store.transaction(() => {
-        store.tasks.upsertTaskThread({
+      const taskThread = store.transaction(() => {
+        const thread = store.tasks.upsertTaskThread({
           taskId: task.id,
           threadId: agent.id,
           workspaceId: workspace.id,
@@ -1401,6 +1598,8 @@ export function createDomainHandlers(
           title,
           liveStatus: "working",
         });
+        // The first turn can start before the thread exists here.
+        store.tasks.setTaskThreadTurnStartedAt(thread.id, dispatchedAt);
 
         if (task.status === "backlog" || task.status === "todo") {
           store.tasks.updateTask(task.id, { status: "in_progress" });
@@ -1422,7 +1621,29 @@ export function createDomainHandlers(
           threadId: agent.id,
           body: `Dispatched to ${preset.name}`,
         });
+        return thread;
       });
+
+      if (preset.checkIn) {
+        try {
+          const heartbeatId = await createCheckInHeartbeat(
+            runCli,
+            agent.id,
+            preset.checkIn,
+            task.key,
+          );
+          store.tasks.setTaskThreadHeartbeatId(taskThread.id, heartbeatId);
+        } catch (error) {
+          store.tasks.createComment({
+            taskId: task.id,
+            kind: "system",
+            authorName: SYSTEM_AUTHOR_NAME,
+            presetName: preset.name,
+            threadId: agent.id,
+            body: `Check-in could not be scheduled: ${cliErrorMessage(error)}`,
+          });
+        }
+      }
 
       try {
         await agent.timeline.append({
@@ -1489,6 +1710,7 @@ export function createDomainHandlers(
           `Thread ${input.threadId} is not attached to ${task.key}`,
         );
       }
+      void releaseCheckInHeartbeats(store, runCli, [taskThread]);
       store.tasks.deleteTaskThread(taskThread.id);
       return { threadId: taskThread.threadId };
     },
@@ -1542,6 +1764,7 @@ export function createDomainHandlers(
       environmentKind?: Preset["environmentKind"];
       baseBranch?: string | null;
       machineId?: string | null;
+      checkIn?: string | null;
       instructions?: string;
     }) {
       const preset = store.tasks.createPreset({
@@ -1554,6 +1777,7 @@ export function createDomainHandlers(
         environmentKind: input.environmentKind ?? "project-default",
         baseBranch: input.baseBranch ?? null,
         machineId: input.machineId ?? null,
+        checkIn: input.checkIn ?? null,
         instructions: input.instructions ?? "",
         builtin: false,
       });
@@ -1570,6 +1794,7 @@ export function createDomainHandlers(
       environmentKind?: Preset["environmentKind"];
       baseBranch?: string | null;
       machineId?: string | null;
+      checkIn?: string | null;
       instructions?: string;
     }) {
       const { presetId, ...changes } = input;
@@ -1885,6 +2110,7 @@ export function transitionTrackedThread(
   store: TasksApiStore,
   threadId: string,
   liveStatus: TaskThreadLiveStatus,
+  runCli: PaseoCliRunner = runPaseoCli,
 ): void {
   for (const thread of store.tasks.listTaskThreadsByThreadId(threadId)) {
     if (
@@ -1906,13 +2132,159 @@ export function transitionTrackedThread(
         });
       }
     });
+    if (liveStatus === "completed") {
+      void releaseCheckInHeartbeats(store, runCli, [thread]);
+    }
   }
+}
+
+type TurnTimeline = PluginLifecycleEvents["agent.turn_ended"]["timeline"];
+
+function lastAssistantExcerpt(timeline: TurnTimeline): string | null {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const item = timeline[index]!;
+    if (item.type !== "assistant_message") continue;
+    const text = item.text.trim();
+    if (!text) continue;
+    return text.length > STOP_EXCERPT_LENGTH
+      ? `${text.slice(0, STOP_EXCERPT_LENGTH - 1).trimEnd()}…`
+      : text;
+  }
+  return null;
+}
+
+// Subtask threads of this agent whose turn just ended with no comment and no
+// status change by the agent. Each turn start is consumed here, once.
+function silentWorkerThreads(
+  store: TasksApiStore,
+  agentId: string,
+): Array<{ thread: TaskThread; task: StoredTask; parentTaskId: string }> {
+  return store.tasks.listTaskThreadsByThreadId(agentId).flatMap((thread) => {
+    const startedAt = store.tasks.takeTaskThreadTurnStartedAt(thread.id);
+    if (!startedAt) return [];
+    const task = store.tasks.getTask(thread.taskId);
+    if (!task?.parentTaskId) return [];
+    if (store.tasks.agentReportedSince(task.id, agentId, startedAt)) return [];
+    // Report a quiet agent once; again only after it has reported since.
+    const lastStop = store.tasks.lastSilentStopAt(task.id, agentId);
+    if (lastStop && !store.tasks.agentReportedSince(task.id, agentId, lastStop)) return [];
+    return [{ thread, task, parentTaskId: task.parentTaskId }];
+  });
+}
+
+async function reportSilentStop(
+  paseo: PaseoApi,
+  store: TasksApiStore,
+  stop: { thread: TaskThread; task: StoredTask; parentTaskId: string },
+  excerpt: string | null,
+  failed: boolean,
+): Promise<void> {
+  const { thread, task } = stop;
+  try {
+    if (!failed) {
+      const quote = excerpt
+        ? `\n\n${excerpt
+            .split("\n")
+            .map((line) => `> ${line}`)
+            .join("\n")}`
+        : "";
+      store.tasks.createComment({
+        taskId: task.id,
+        kind: "system",
+        authorName: SYSTEM_AUTHOR_NAME,
+        presetName: thread.presetName,
+        threadId: thread.threadId,
+        body: `${thread.presetName} stopped without reporting.${quote}`,
+      });
+    }
+    await createCommentWithDelivery(paseo, store, {
+      taskId: stop.parentTaskId,
+      kind: "system",
+      authorName: SYSTEM_AUTHOR_NAME,
+      presetName: null,
+      threadId: null,
+      body: `${task.key}: ${thread.presetName} stopped without reporting.`,
+      notify: true,
+      awaitDelivery: true,
+    });
+  } catch (error) {
+    console.warn(`Failed to report silent stop on ${task.key}:`, error);
+  }
+}
+
+async function refreshedLiveStatus(
+  paseo: PaseoApi,
+  agentId: string,
+): Promise<TaskThreadLiveStatus | null> {
+  try {
+    const refreshed = await paseo.agents.ref(agentId).refresh();
+    return refreshed
+      ? mapAgentStatusToLiveStatus(
+          refreshed.agent.status,
+          refreshed.agent.archivedAt,
+        )
+      : "completed";
+  } catch (error) {
+    return error instanceof Error && /not found/i.test(error.message)
+      ? "completed"
+      : null;
+  }
+}
+
+async function reconcileTrackedThreads(
+  store: TasksApiStore,
+  paseo: PaseoApi,
+  runCli: PaseoCliRunner,
+): Promise<void> {
+  try {
+    const statusByAgent = new Map<string, TaskThreadLiveStatus | null>();
+    for (const thread of store.tasks.listUnfinishedTaskThreads()) {
+      if (!statusByAgent.has(thread.threadId)) {
+        statusByAgent.set(
+          thread.threadId,
+          await refreshedLiveStatus(paseo, thread.threadId),
+        );
+      }
+      const liveStatus = statusByAgent.get(thread.threadId);
+      // Skip threads a lifecycle event updated while the refresh was pending.
+      const current = store.tasks.getTaskThread(thread.id);
+      if (
+        !liveStatus ||
+        !current ||
+        current.liveStatus !== thread.liveStatus ||
+        liveStatus === current.liveStatus
+      ) {
+        continue;
+      }
+      store.tasks.updateTaskThreadStatus(thread.id, liveStatus);
+      if (liveStatus === "completed") {
+        await releaseCheckInHeartbeats(store, runCli, [current]);
+      }
+    }
+  } catch (error) {
+    console.warn("Failed to reconcile Tasks agent status:", error);
+  }
+}
+
+// Refreshes every unfinished task thread from Paseo the first time a Paseo API
+// is available after load, in the background.
+export function reconcileOnFirstCapture(
+  store: TasksApiStore,
+  runCli: PaseoCliRunner = runPaseoCli,
+): (paseo: PaseoApi) => void {
+  let started = false;
+  return (paseo) => {
+    if (started) return;
+    started = true;
+    void reconcileTrackedThreads(store, paseo, runCli);
+  };
 }
 
 export function registerLifecycleHooks(
   server: PluginServerContext,
   store: TasksApiStore,
   onPaseoCaptured: (paseo: PaseoApi) => void,
+  reportSilentStops: () => Promise<boolean> = async () => false,
 ): void {
   server.on("agent.created", ({ agent }, { paseo }) => {
     onPaseoCaptured(paseo);
@@ -1921,15 +2293,26 @@ export function registerLifecycleHooks(
 
   server.on("agent.turn_started", ({ agent }, { paseo }) => {
     onPaseoCaptured(paseo);
+    const startedAt = new Date().toISOString();
+    for (const thread of store.tasks.listTaskThreadsByThreadId(agent.id)) {
+      store.tasks.setTaskThreadTurnStartedAt(thread.id, startedAt);
+    }
     transitionTrackedThread(store, agent.id, "working");
   });
 
-  server.on("agent.turn_ended", ({ agent, outcome }, { paseo }) => {
+  server.on("agent.turn_ended", async ({ agent, outcome, timeline }, { paseo }) => {
     onPaseoCaptured(paseo);
+    const silent = (await reportSilentStops())
+      ? silentWorkerThreads(store, agent.id)
+      : [];
     if (outcome.kind === "failed") {
       transitionTrackedThread(store, agent.id, "failed");
     } else {
       transitionTrackedThread(store, agent.id, "idle");
+    }
+    const excerpt = lastAssistantExcerpt(timeline);
+    for (const stop of silent) {
+      await reportSilentStop(paseo, store, stop, excerpt, outcome.kind === "failed");
     }
   });
 

@@ -58,6 +58,7 @@ import { connectBridgeDaemon } from "./server/daemon-connection";
 import {
   createApiStore,
   createDomainHandlers,
+  reconcileOnFirstCapture,
   registerLifecycleHooks,
   seedDemoData,
 } from "./server/domain";
@@ -68,11 +69,16 @@ export default function contribute(server: PluginServerContext) {
   store.ensureDefaultPresets();
 
   let latestPaseo: PaseoApi | null = null;
+  const reconcileOnce = reconcileOnFirstCapture(store);
   const capturePaseo = (paseo: PaseoApi) => {
     latestPaseo = paseo;
+    reconcileOnce(paseo);
   };
 
-  const domain = createDomainHandlers(store, () => latestPaseo);
+  const domain = createDomainHandlers(store, () => latestPaseo, undefined, async () => {
+    const current = await settings.read();
+    return current.status === "ready" && current.values.requireReviewEvidence;
+  });
 
   let bridgeConnection: Awaited<ReturnType<typeof connectBridgeDaemon>> | null = null;
   let bridgeConnecting: Promise<void> | null = null;
@@ -81,7 +87,7 @@ export default function contribute(server: PluginServerContext) {
     if (!bridgeConnecting) {
       bridgeConnecting = connectBridgeDaemon().then((connection) => {
         bridgeConnection = connection;
-        if (!latestPaseo) latestPaseo = connection.paseo;
+        if (!latestPaseo) capturePaseo(connection.paseo);
       }).finally(() => { bridgeConnecting = null; });
     }
     await bridgeConnecting;
@@ -109,6 +115,7 @@ export default function contribute(server: PluginServerContext) {
             autoInjectInstructions: true,
             defaultView: "board" as const,
             showCompletedInBoard: true,
+            requireReviewEvidence: false,
           };
 
     const activeBridge = bridge ?? (await bridgeReady);
@@ -117,7 +124,7 @@ export default function contribute(server: PluginServerContext) {
     if (values.autoInjectInstructions) {
       const existingPrompt = nextConfig.systemPrompt ?? "";
       if (!existingPrompt.includes(TASKS_SKILL_MARKER)) {
-        nextConfig.systemPrompt = [existingPrompt, buildTasksInstructions()]
+        nextConfig.systemPrompt = [existingPrompt, buildTasksInstructions(values.requireReviewEvidence)]
           .filter(Boolean)
           .join("\n\n");
       }
@@ -183,7 +190,10 @@ export default function contribute(server: PluginServerContext) {
     };
   });
 
-  registerLifecycleHooks(server, store, capturePaseo);
+  registerLifecycleHooks(server, store, capturePaseo, async () => {
+    const current = await settings.read();
+    return current.status === "ready" && current.values.reportSilentSubtaskAgents;
+  });
 
   // Folder handlers
   server.handle(createFolderRpc, (input, { paseo }) => {

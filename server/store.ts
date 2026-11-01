@@ -53,6 +53,8 @@ type SqlParameter = string | number;
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const POSITION_STEP = 1_024;
 const MIN_POSITION_GAP = 0.000_001;
+const MAX_PROJECT_STAGES = 20;
+const MAX_STAGE_NAME_LENGTH = 40;
 
 interface FolderRow {
   id: string;
@@ -69,6 +71,7 @@ interface ProjectRow {
   color: string;
   folder_id: string | null;
   linked_bb_project_id: string | null;
+  stages: string | null;
   created_at: string;
 }
 
@@ -83,6 +86,7 @@ interface TaskRow {
   priority: Task["priority"];
   due_date: string | null;
   parent_task_id: string | null;
+  stage: string | null;
   position: number;
   created_at: string;
   updated_at: string;
@@ -161,6 +165,7 @@ interface PresetRow {
   environment_kind: PresetEnvironmentKind;
   base_branch: string | null;
   machine_id: string | null;
+  check_in: string | null;
   instructions: string;
   builtin: number;
   created_at: string;
@@ -303,6 +308,28 @@ function validateLinkedProjectId(id: string | null): string | null {
   return trimmed;
 }
 
+function validateStages(stages: readonly string[]): string | null {
+  const names = stages.map((stage) => stage.trim()).filter(Boolean);
+  if (names.length > MAX_PROJECT_STAGES) {
+    throw new Error(`A project can have at most ${MAX_PROJECT_STAGES} stages`);
+  }
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (name.length > MAX_STAGE_NAME_LENGTH) {
+      throw new Error(
+        `Stage names must contain at most ${MAX_STAGE_NAME_LENGTH} characters: ${name}`,
+      );
+    }
+    const folded = name.toLowerCase();
+    if (folded === "none") {
+      throw new Error('"none" clears a stage and cannot be a stage name');
+    }
+    if (seen.has(folded)) throw new Error(`Duplicate stage: ${name}`);
+    seen.add(folded);
+  }
+  return names.length > 0 ? JSON.stringify(names) : null;
+}
+
 function validateThreadId(id: string): string;
 function validateThreadId(id: null): null;
 function validateThreadId(id: string | null): string | null;
@@ -347,6 +374,7 @@ function projectFromRow(row: ProjectRow): Project {
     color: row.color,
     folderId: row.folder_id,
     linkedBbProjectId: row.linked_bb_project_id,
+    stages: row.stages ? (JSON.parse(row.stages) as string[]) : [],
     createdAt: row.created_at,
   };
 }
@@ -363,6 +391,7 @@ function taskFromRow(row: TaskRow): Task {
     priority: row.priority,
     dueDate: row.due_date,
     parentTaskId: row.parent_task_id,
+    stage: row.stage,
     position: row.position,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -441,6 +470,7 @@ function presetFromRow(row: PresetRow): Preset {
     environmentKind: row.environment_kind,
     baseBranch: row.base_branch,
     machineId: row.machine_id,
+    checkIn: row.check_in,
     instructions: row.instructions,
     builtin: row.builtin === 1,
     createdAt: row.created_at,
@@ -473,6 +503,15 @@ function validatePresetEnvironment(input: {
     );
   }
   return { environmentKind: input.environmentKind, baseBranch, machineId };
+}
+
+function validateCheckIn(checkIn: string | null): string | null {
+  if (checkIn === null) return null;
+  const fields = checkIn.trim().split(/\s+/);
+  if (fields.length !== 5 || !fields.every((field) => /^[0-9A-Za-z*,/-]+$/.test(field))) {
+    throw new Error(`Check-in must be a five-field cron expression: ${checkIn}`);
+  }
+  return fields.join(" ");
 }
 
 export function escapeLike(value: string): string {
@@ -631,12 +670,21 @@ export function createTasksStore(db: PluginDatabase) {
     const folderId = input.folderId ?? null;
     if (folderId !== null) requireFolder(folderId);
     db.prepare<
-      [string, string, string, string, string | null, string | null, string]
+      [
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string,
+      ]
     >(
       `
       INSERT INTO projects
-        (id, name, prefix, next_task_number, color, folder_id, linked_bb_project_id, created_at)
-      VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+        (id, name, prefix, next_task_number, color, folder_id, linked_bb_project_id, stages, created_at)
+      VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
     `,
     ).run(
       id,
@@ -645,6 +693,7 @@ export function createTasksStore(db: PluginDatabase) {
       requireNonEmpty(input.color, "Project color"),
       folderId,
       validateLinkedProjectId(input.linkedBbProjectId ?? null),
+      validateStages(input.stages ?? []),
       nowIso(),
     );
     return requireProject(id);
@@ -679,10 +728,21 @@ export function createTasksStore(db: PluginDatabase) {
     const folderId =
       input.folderId === undefined ? current.folderId : input.folderId;
     if (folderId !== null) requireFolder(folderId);
-    db.prepare<[string, string, string, string | null, string | null, string]>(
+    db.prepare<
+      [
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string,
+      ]
+    >(
       `
       UPDATE projects
-      SET name = ?, prefix = ?, color = ?, folder_id = ?, linked_bb_project_id = ?
+      SET name = ?, prefix = ?, color = ?, folder_id = ?, linked_bb_project_id = ?,
+        stages = ?
       WHERE id = ?
     `,
     ).run(
@@ -699,6 +759,7 @@ export function createTasksStore(db: PluginDatabase) {
       input.linkedBbProjectId === undefined
         ? current.linkedBbProjectId
         : validateLinkedProjectId(input.linkedBbProjectId),
+      validateStages(input.stages ?? current.stages),
       id,
     );
     return requireProject(id);
@@ -1121,6 +1182,7 @@ export function createTasksStore(db: PluginDatabase) {
           Task["priority"],
           string | null,
           string | null,
+          string | null,
           number,
           string,
           string,
@@ -1129,7 +1191,7 @@ export function createTasksStore(db: PluginDatabase) {
         `
         UPDATE tasks SET
           title = ?, description = ?, status = ?, priority = ?, due_date = ?,
-          parent_task_id = ?, position = ?, updated_at = ?
+          parent_task_id = ?, stage = ?, position = ?, updated_at = ?
         WHERE id = ?
       `,
       ).run(
@@ -1143,6 +1205,7 @@ export function createTasksStore(db: PluginDatabase) {
           ? current.dueDate
           : validateDueDate(input.dueDate),
         parentTaskId,
+        input.stage === undefined ? current.stage : input.stage,
         position,
         nowIso(),
         id,
@@ -1195,12 +1258,12 @@ export function createTasksStore(db: PluginDatabase) {
         "DELETE FROM task_key_aliases WHERE prefix = ? COLLATE NOCASE AND number = ?",
       );
       const moveRow = db.prepare<
-        [string, number, number, string | null, string, string]
+        [string, number, number, string | null, string | null, string, string]
       >(
         `
         UPDATE tasks
         SET project_id = ?, number = ?, position = ?, parent_task_id = ?,
-          updated_at = ?
+          stage = ?, updated_at = ?
         WHERE id = ?
       `,
       );
@@ -1228,6 +1291,9 @@ export function createTasksStore(db: PluginDatabase) {
           number,
           nextPosition.get(target.id, task.status)?.position ?? POSITION_STEP,
           task.id === root.id ? null : root.id,
+          target.stages.find(
+            (stage) => stage.toLowerCase() === task.stage?.toLowerCase(),
+          ) ?? null,
           updatedAt,
           task.id,
         );
@@ -1764,6 +1830,92 @@ export function createTasksStore(db: PluginDatabase) {
     return requireTaskThread(id);
   }
 
+  function listUnfinishedTaskThreads(): TaskThread[] {
+    return db
+      .prepare<[], TaskThreadRow>(
+        "SELECT * FROM task_threads WHERE live_status <> 'completed' ORDER BY id",
+      )
+      .all()
+      .map(taskThreadFromRow);
+  }
+
+  function setTaskThreadTurnStartedAt(id: string, startedAt: string): void {
+    db.prepare<[string, string]>(
+      "UPDATE task_threads SET turn_started_at = ? WHERE id = ?",
+    ).run(startedAt, id);
+  }
+
+  // Returns the turn start once and clears it, so a turn is judged only once.
+  function takeTaskThreadTurnStartedAt(id: string): string | null {
+    const row = db
+      .prepare<[string], { turn_started_at: string | null }>(
+        "SELECT turn_started_at FROM task_threads WHERE id = ?",
+      )
+      .get(id);
+    if (!row?.turn_started_at) return null;
+    db.prepare<[string]>(
+      "UPDATE task_threads SET turn_started_at = NULL WHERE id = ?",
+    ).run(id);
+    return row.turn_started_at;
+  }
+
+  function lastSilentStopAt(taskId: string, threadId: string): string | null {
+    return (
+      db
+        .prepare<[string, string], { created_at: string }>(
+          `
+          SELECT created_at FROM comments
+          WHERE task_id = ? AND thread_id = ? AND kind = 'system'
+            AND body LIKE '% stopped without reporting.%'
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        )
+        .get(taskId, threadId)?.created_at ?? null
+    );
+  }
+
+  function getTaskThreadHeartbeatId(id: string): string | null {
+    return (
+      db
+        .prepare<[string], { heartbeat_id: string | null }>(
+          "SELECT heartbeat_id FROM task_threads WHERE id = ?",
+        )
+        .get(id)?.heartbeat_id ?? null
+    );
+  }
+
+  function setTaskThreadHeartbeatId(id: string, heartbeatId: string | null): void {
+    db.prepare<[string | null, string]>(
+      "UPDATE task_threads SET heartbeat_id = ? WHERE id = ?",
+    ).run(heartbeatId, id);
+  }
+
+  // The CLI and MCP bridge record an agent's status change with the author
+  // "agent (<id>)", so that is how a status change by this agent is found.
+  function agentReportedSince(
+    taskId: string,
+    threadId: string,
+    since: string,
+  ): boolean {
+    return Boolean(
+      db
+        .prepare<[string, string, string, string], { found: number }>(
+          `
+          SELECT 1 AS found FROM comments
+          WHERE task_id = ?
+            AND created_at >= ?
+            AND (
+              (kind = 'agent' AND thread_id = ?)
+              OR (kind = 'system' AND author_name = ? AND body LIKE 'Status changed to %')
+            )
+          LIMIT 1
+        `,
+        )
+        .get(taskId, since, threadId, `agent (${threadId})`),
+    );
+  }
+
   function deleteTaskThread(id: string): boolean {
     return (
       db.prepare<[string]>("DELETE FROM task_threads WHERE id = ?").run(id)
@@ -1797,6 +1949,7 @@ export function createTasksStore(db: PluginDatabase) {
         PresetEnvironmentKind,
         string | null,
         string | null,
+        string | null,
         string,
         number,
         string,
@@ -1806,9 +1959,9 @@ export function createTasksStore(db: PluginDatabase) {
       INSERT INTO presets (
         id, name, provider_id, model_id, reasoning_level, service_tier,
         permission_mode,
-        environment_kind, base_branch, machine_id, instructions, builtin,
+        environment_kind, base_branch, machine_id, check_in, instructions, builtin,
         created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     ).run(
       id,
@@ -1821,6 +1974,7 @@ export function createTasksStore(db: PluginDatabase) {
       environment.environmentKind,
       environment.baseBranch,
       environment.machineId,
+      validateCheckIn(input.checkIn ?? null),
       input.instructions,
       input.builtin ? 1 : 0,
       nowIso(),
@@ -1857,6 +2011,7 @@ export function createTasksStore(db: PluginDatabase) {
         PresetEnvironmentKind,
         string | null,
         string | null,
+        string | null,
         string,
         number,
         string,
@@ -1866,7 +2021,7 @@ export function createTasksStore(db: PluginDatabase) {
       UPDATE presets SET
         name = ?, provider_id = ?, model_id = ?, reasoning_level = ?,
         service_tier = ?, permission_mode = ?, environment_kind = ?, base_branch = ?,
-        machine_id = ?, instructions = ?, builtin = ?
+        machine_id = ?, check_in = ?, instructions = ?, builtin = ?
       WHERE id = ?
     `,
     ).run(
@@ -1889,6 +2044,7 @@ export function createTasksStore(db: PluginDatabase) {
       environment.environmentKind,
       environment.baseBranch,
       environment.machineId,
+      input.checkIn === undefined ? current.checkIn : validateCheckIn(input.checkIn),
       input.instructions ?? current.instructions,
       (input.builtin ?? current.builtin) ? 1 : 0,
       id,
@@ -1951,6 +2107,13 @@ export function createTasksStore(db: PluginDatabase) {
     listTaskThreadsByThreadId,
     listTaskThreads,
     updateTaskThreadStatus,
+    listUnfinishedTaskThreads,
+    setTaskThreadTurnStartedAt,
+    takeTaskThreadTurnStartedAt,
+    lastSilentStopAt,
+    getTaskThreadHeartbeatId,
+    setTaskThreadHeartbeatId,
+    agentReportedSince,
     deleteTaskThread,
     createPreset,
     getPreset,

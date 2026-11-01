@@ -33,6 +33,7 @@ export interface Project {
   color: string;
   folderId: string | null;
   linkedBbProjectId: string | null;
+  stages: string[];
   createdAt: string;
 }
 
@@ -47,6 +48,7 @@ export interface Task {
   priority: TaskPriority;
   dueDate: string | null;
   parentTaskId: string | null;
+  stage: string | null;
   position: number;
   createdAt: string;
   updatedAt: string;
@@ -111,6 +113,7 @@ export interface Preset {
   environmentKind: PresetEnvironmentKind;
   baseBranch: string | null;
   machineId: string | null;
+  checkIn: string | null;
   instructions: string;
   builtin: boolean;
   createdAt: string;
@@ -138,6 +141,7 @@ export interface CreateProjectInput {
   color: string;
   folderId?: string | null;
   linkedBbProjectId?: string | null;
+  stages?: readonly string[];
 }
 
 export interface UpdateProjectInput {
@@ -146,6 +150,7 @@ export interface UpdateProjectInput {
   color?: string;
   folderId?: string | null;
   linkedBbProjectId?: string | null;
+  stages?: readonly string[];
 }
 
 export interface CreateTaskInput {
@@ -165,6 +170,7 @@ export interface UpdateTaskInput {
   priority?: TaskPriority;
   dueDate?: string | null;
   parentTaskId?: string | null;
+  stage?: string | null;
 }
 
 export interface MoveTaskToProjectResult {
@@ -253,6 +259,7 @@ export interface CreatePresetInput {
   environmentKind: PresetEnvironmentKind;
   baseBranch: string | null;
   machineId: string | null;
+  checkIn?: string | null;
   instructions: string;
   builtin?: boolean;
 }
@@ -267,6 +274,7 @@ export interface UpdatePresetInput {
   environmentKind?: PresetEnvironmentKind;
   baseBranch?: string | null;
   machineId?: string | null;
+  checkIn?: string | null;
   instructions?: string;
   builtin?: boolean;
 }

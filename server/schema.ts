@@ -225,6 +225,15 @@ const MIGRATIONS = [
     );
     CREATE INDEX idx_task_key_aliases_task ON task_key_aliases(task_id);
   `,
+  `
+    ALTER TABLE projects ADD COLUMN stages TEXT;
+    ALTER TABLE tasks ADD COLUMN stage TEXT;
+  `,
+  `
+    ALTER TABLE task_threads ADD COLUMN turn_started_at TEXT;
+    ALTER TABLE task_threads ADD COLUMN heartbeat_id TEXT;
+    ALTER TABLE presets ADD COLUMN check_in TEXT;
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

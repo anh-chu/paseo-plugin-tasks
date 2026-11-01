@@ -13,6 +13,10 @@ export interface TasksBridgeHandle {
   close(): Promise<void>;
 }
 
+// tasks_update asks for evidence only when the Require evidence setting is on.
+const TASKS_UPDATE_PLAIN_DESCRIPTION =
+  "Update a task's workflow status, priority, title, description, or due date. Use in_review when implementation is ready for review, or done when complete.";
+
 const MCP_TOOLS = [
   {
     name: "tasks_projects",
@@ -155,6 +159,11 @@ const MCP_TOOLS = [
         dueDate: {
           type: "string",
           description: "YYYY-MM-DD or empty string to clear",
+        },
+        stage: {
+          type: ["string", "null"],
+          description:
+            "One of the task project's stages (see tasks_projects); \"none\" or null clears",
         },
       },
       required: ["key"],
@@ -347,6 +356,11 @@ async function executeMcpToolCall(
       if (typeof args.dueDate === "string") {
         if (args.dueDate === "") argv.push("--no-due");
         else argv.push("--due", args.dueDate);
+      }
+      if (args.stage === null) {
+        argv.push("--stage", "none");
+      } else if (typeof args.stage === "string") {
+        argv.push("--stage", args.stage);
       }
       break;
     case "tasks_comment":
@@ -596,7 +610,13 @@ export async function startTasksBridge(
             jsonrpc: "2.0",
             id: rpc.id,
             result: {
-              tools: MCP_TOOLS,
+              tools: (await domain.requireEvidence())
+                ? MCP_TOOLS
+                : MCP_TOOLS.map((tool) =>
+                    tool.name === "tasks_update"
+                      ? { ...tool, description: TASKS_UPDATE_PLAIN_DESCRIPTION }
+                      : tool,
+                  ),
             },
           });
           return;

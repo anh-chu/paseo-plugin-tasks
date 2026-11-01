@@ -275,6 +275,26 @@ export function TasksSettingsScreen({ theme }: PluginSurfaceProps) {
               )
             }
           />
+          <SettingsSwitch
+            label="Tell the parent task when a subtask's agent stops without reporting"
+            value={values.reportSilentSubtaskAgents}
+            onValueChange={(next) =>
+              void settings.save(
+                { ...values, reportSilentSubtaskAgents: next },
+                revision,
+              )
+            }
+          />
+          <SettingsSwitch
+            label="Require evidence before agents move a task to In review or Done"
+            value={values.requireReviewEvidence}
+            onValueChange={(next) =>
+              void settings.save(
+                { ...values, requireReviewEvidence: next },
+                revision,
+              )
+            }
+          />
         </SettingsCard>
       </SettingsSection>
 
