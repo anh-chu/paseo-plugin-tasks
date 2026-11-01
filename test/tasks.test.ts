@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { transformAssistantTaskDirectives } from "../shared/directive";
+import { buildTasksInstructions } from "../shared/constants";
 import { startTasksBridge } from "../server/bridge";
 import { runTasksCli } from "../server/cli-runner";
 import {
@@ -129,7 +130,7 @@ describe("paseo-plugin-tasks", () => {
     const db = openTasksDatabase(join(tempDir, "tasks.db"));
     store = createApiStore(db, tempDir);
     store.ensureDefaultPresets();
-    domain = createDomainHandlers(store, () => mockPaseo as never);
+    domain = createDomainHandlers(store, () => mockPaseo as never, undefined, async () => true);
     sentPrompts.length = 0;
     createdWorkspaces.length = 0;
     createdAgents.length = 0;
@@ -149,6 +150,19 @@ describe("paseo-plugin-tasks", () => {
     store.db.prepare("UPDATE presets SET permission_mode = ? WHERE id = ?").run("default", preset.id);
     expect(domain.listPresets().presets.find((p) => p.id === preset.id)?.permissionMode).toBe("accept-edits");
     store.ensureDefaultPresets();
+  });
+
+  it("does not require or ask for evidence when the setting is off", async () => {
+    const off = createDomainHandlers(store, () => mockPaseo as never);
+    const project = off.createProject({ name: "Off", prefix: "OFF", color: "blue", linkedBbProjectId: "prj_demo123" }).project;
+    const created = off.createTask({ projectId: project.id, title: "Check", status: "in_progress", priority: "medium" });
+    if (!created.ok) throw new Error("task creation failed");
+    const moved = await runTasksCli(["update", created.task.key, "--status", "in_review"], store, off);
+    expect(moved.exitCode).toBe(0);
+    await off.delegate({ taskId: created.task.id, presetId: off.listPresets().presets[0]!.id });
+    expect(createdAgents.at(-1)?.prompt ?? "").not.toContain("Evidence for");
+    expect(buildTasksInstructions(false)).not.toContain("Evidence for");
+    expect(buildTasksInstructions(true)).toContain("Evidence for");
   });
 
   it("requires fresh evidence for CLI review and completion while allowing failed checks for review", async () => {

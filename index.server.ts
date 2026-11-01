@@ -75,7 +75,10 @@ export default function contribute(server: PluginServerContext) {
     reconcileOnce(paseo);
   };
 
-  const domain = createDomainHandlers(store, () => latestPaseo);
+  const domain = createDomainHandlers(store, () => latestPaseo, undefined, async () => {
+    const current = await settings.read();
+    return current.status === "ready" && current.values.requireReviewEvidence;
+  });
 
   let bridgeConnection: Awaited<ReturnType<typeof connectBridgeDaemon>> | null = null;
   let bridgeConnecting: Promise<void> | null = null;
@@ -112,6 +115,7 @@ export default function contribute(server: PluginServerContext) {
             autoInjectInstructions: true,
             defaultView: "board" as const,
             showCompletedInBoard: true,
+            requireReviewEvidence: false,
           };
 
     const activeBridge = bridge ?? (await bridgeReady);
@@ -120,7 +124,7 @@ export default function contribute(server: PluginServerContext) {
     if (values.autoInjectInstructions) {
       const existingPrompt = nextConfig.systemPrompt ?? "";
       if (!existingPrompt.includes(TASKS_SKILL_MARKER)) {
-        nextConfig.systemPrompt = [existingPrompt, buildTasksInstructions()]
+        nextConfig.systemPrompt = [existingPrompt, buildTasksInstructions(values.requireReviewEvidence)]
           .filter(Boolean)
           .join("\n\n");
       }

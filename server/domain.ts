@@ -430,6 +430,7 @@ export interface SeedPromptInput {
   attachments: readonly Pick<StoredAttachment, "id" | "fileName">[];
   recentComments: readonly StoredComment[];
   threads: readonly Pick<TaskThread, "threadId" | "title" | "liveStatus">[];
+  requireEvidence?: boolean;
   presetInstructions: string;
   extraInstructions?: string;
 }
@@ -497,8 +498,8 @@ export function buildSeedPrompt(input: SeedPromptInput): string {
     markdownSection("Attached agent sessions", formatThreads(input.threads)),
     markdownSection(
       "Report-back contract",
-      `You are working on task ${input.task.key}. Use the \`paseo-tasks\` CLI (or \`bb tasks\` / MCP \`tasks_*\` tools): comment substantive updates (\`paseo-tasks comment ${input.task.key} --body "..."\`), attach result artifacts, and set status when done (\`paseo-tasks update ${input.task.key} --status in_review\`) or explain any blocker in a comment. Emit \`::task{key="${input.task.key}"}\` on its own line when referencing this task in your reply. Your agent session is already attached to the task.\n\n` +
-      `Before moving this task to in_review or done, add a comment headed **Evidence for \`${input.task.key}\`** — VERDICT, followed by nonempty **What ran** and **What was not covered** sections. Choose PASS, PASS WITH GAPS, FAILED CHECK, NOTHING CHECKABLE, or BLOCKED. Explain failures and gaps so a person can review them. Done requires PASS, PASS WITH GAPS, or NOTHING CHECKABLE.`,
+      `You are working on task ${input.task.key}. Use the \`paseo-tasks\` CLI (or \`bb tasks\` / MCP \`tasks_*\` tools): comment substantive updates (\`paseo-tasks comment ${input.task.key} --body "..."\`), attach result artifacts, and set status when done (\`paseo-tasks update ${input.task.key} --status in_review\`) or explain any blocker in a comment. Emit \`::task{key="${input.task.key}"}\` on its own line when referencing this task in your reply. Your agent session is already attached to the task.` +
+      (input.requireEvidence ? `\n\nBefore moving this task to in_review or done, add a comment headed **Evidence for \`${input.task.key}\`** — VERDICT, followed by nonempty **What ran** and **What was not covered** sections. Choose PASS, PASS WITH GAPS, FAILED CHECK, NOTHING CHECKABLE, or BLOCKED. Explain failures and gaps so a person can review them. Done requires PASS, PASS WITH GAPS, or NOTHING CHECKABLE.` : ""),
     ),
   ];
 
@@ -863,8 +864,10 @@ export function createDomainHandlers(
   store: TasksApiStore,
   getPaseo: () => PaseoApi | null,
   runCli: PaseoCliRunner = runPaseoCli,
+  requireEvidence: () => Promise<boolean> = async () => false,
 ) {
   return {
+    requireEvidence,
     createFolder(input: { name: string; parentFolderId?: string | null }) {
       const folder = store.tasks.createFolder(input);
       return { folder };
@@ -1530,6 +1533,7 @@ export function createDomainHandlers(
         attachments,
         recentComments,
         threads: store.tasks.listTaskThreads(task.id),
+        requireEvidence: await requireEvidence(),
         presetInstructions: preset.instructions,
         extraInstructions: input.extraInstructions,
       });

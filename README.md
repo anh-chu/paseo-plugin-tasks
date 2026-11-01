@@ -80,7 +80,7 @@ seed-demo --yes                       Create sample folders, projects, labels, t
 
 The same operations are exposed as MCP tools: `tasks_projects`, `tasks_list`, `tasks_show`, `tasks_create`, `tasks_update`, `tasks_comment`, `tasks_delegate`, `tasks_attach`, and `tasks_detach`.
 
-CLI and MCP status changes to `in_review` or `done` require a task comment for the current work cycle:
+With the **Require evidence before agents move a task to In review or Done** setting on (off by default), CLI and MCP status changes to `in_review` or `done` require a task comment for the current work cycle, and agents are told to write one:
 
 ```md
 **Evidence for `ABC-12`** — PASS WITH GAPS
@@ -92,7 +92,7 @@ Describe checks and results, or explain why none ran.
 Describe gaps or blockers, or say none.
 ```
 
-Choose one verdict: `PASS`, `PASS WITH GAPS`, `FAILED CHECK`, `NOTHING CHECKABLE`, or `BLOCKED`. Any verdict can enter review; `done` requires `PASS`, `PASS WITH GAPS`, or `NOTHING CHECKABLE`. Dispatching an agent or returning the card to an active state requires a new comment. This checks the comment's format; it does not verify its claims. The app's board and task controls remain available for manual changes. To disable the CLI and MCP check, set `PASEO_TASKS_REQUIRE_EVIDENCE=0` in the daemon environment.
+Choose one verdict: `PASS`, `PASS WITH GAPS`, `FAILED CHECK`, `NOTHING CHECKABLE`, or `BLOCKED`. Any verdict can enter review; `done` requires `PASS`, `PASS WITH GAPS`, or `NOTHING CHECKABLE`. Dispatching an agent or returning the card to an active state requires a new comment. This checks the comment's format; it does not verify its claims. The app's board and task controls remain available for manual changes. Setting `PASEO_TASKS_REQUIRE_EVIDENCE=0` in the daemon environment also turns the check off.
 
 ### Task cards in replies
 
@@ -122,6 +122,7 @@ A comment sent with **Notify agent** is delivered to the agent that last replied
 | Inject Tasks reporting instructions | on | Appends the report-back contract to an agent's system prompt |
 | Default view | Board | Board or grouped list when the screen opens |
 | Show completed tasks on the board | on | Includes Done and Canceled columns |
+| Require evidence before agents move a task to In review or Done | off | CLI and MCP moves to `in_review` or `done` need an evidence comment (see above) |
 | Tell the parent task when a subtask's agent stops without reporting | off | When a subtask's agent ends a turn without commenting or changing the status, comments on the subtask and notifies the parent task's agent, once until that agent reports again |
 
 ## How it is built

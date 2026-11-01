@@ -12,6 +12,7 @@ export const tasksSettings = defineSettings({
     showCompletedInBoard: z.boolean().default(true),
     collapsedBoardColumns: z.array(z.string()).default([]),
     reportSilentSubtaskAgents: z.boolean().default(false),
+    requireReviewEvidence: z.boolean().default(false),
   }),
 });
 

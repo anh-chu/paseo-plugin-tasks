@@ -13,6 +13,10 @@ export interface TasksBridgeHandle {
   close(): Promise<void>;
 }
 
+// tasks_update asks for evidence only when the Require evidence setting is on.
+const TASKS_UPDATE_PLAIN_DESCRIPTION =
+  "Update a task's workflow status, priority, title, description, or due date. Use in_review when implementation is ready for review, or done when complete.";
+
 const MCP_TOOLS = [
   {
     name: "tasks_projects",
@@ -606,7 +610,13 @@ export async function startTasksBridge(
             jsonrpc: "2.0",
             id: rpc.id,
             result: {
-              tools: MCP_TOOLS,
+              tools: (await domain.requireEvidence())
+                ? MCP_TOOLS
+                : MCP_TOOLS.map((tool) =>
+                    tool.name === "tasks_update"
+                      ? { ...tool, description: TASKS_UPDATE_PLAIN_DESCRIPTION }
+                      : tool,
+                  ),
             },
           });
           return;

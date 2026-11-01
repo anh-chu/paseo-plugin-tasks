@@ -285,6 +285,16 @@ export function TasksSettingsScreen({ theme }: PluginSurfaceProps) {
               )
             }
           />
+          <SettingsSwitch
+            label="Require evidence before agents move a task to In review or Done"
+            value={values.requireReviewEvidence}
+            onValueChange={(next) =>
+              void settings.save(
+                { ...values, requireReviewEvidence: next },
+                revision,
+              )
+            }
+          />
         </SettingsCard>
       </SettingsSection>
 
