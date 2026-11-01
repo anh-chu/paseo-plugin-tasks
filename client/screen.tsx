@@ -284,6 +284,25 @@ function TasksBoardAndListShell({
     }));
   }, [groupByStage, projectStages, tasks, tasksByStatus, visibleStatuses]);
 
+  // Status columns collapse on every board; stage columns per project.
+  const collapsedColumns =
+    settings.status === "ready" ? settings.values.collapsedBoardColumns : [];
+  const columnCollapseKey = (key: string) =>
+    groupByStage ? `stage:${selectedProjectId}:${key}` : `status:${key}`;
+  function toggleColumnCollapsed(key: string) {
+    if (settings.status !== "ready") return;
+    const id = columnCollapseKey(key);
+    void settings.save(
+      {
+        ...settings.values,
+        collapsedBoardColumns: collapsedColumns.includes(id)
+          ? collapsedColumns.filter((c) => c !== id)
+          : [...collapsedColumns, id],
+      },
+      settings.revision,
+    );
+  }
+
   const invalidateAll = () => {
     void queryClient.invalidateQueries({ queryKey: ["tasks"] });
   };
@@ -1338,6 +1357,68 @@ function TasksBoardAndListShell({
                     const prevColumn = boardColumns[columnIdx - 1];
                     const nextColumn = boardColumns[columnIdx + 1];
 
+                    if (collapsedColumns.includes(columnCollapseKey(column.key))) {
+                      return (
+                        <Pressable
+                          key={column.key}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Expand ${column.label}, ${columnTasks.length} tasks`}
+                          onPress={() => toggleColumnCollapsed(column.key)}
+                          style={{
+                            width: 40,
+                            minHeight: 280,
+                            borderRadius: 12,
+                            backgroundColor: theme.colors.surface1,
+                            borderWidth: 1,
+                            borderColor: theme.colors.border,
+                            paddingVertical: 12,
+                            alignItems: "center",
+                            gap: 8,
+                            overflow: "hidden",
+                          }}
+                        >
+                          <Icon
+                            name="ChevronRight"
+                            size={14}
+                            color={theme.colors.foregroundMuted}
+                          />
+                          {status ? (
+                            <StatusIcon status={status} theme={theme} size={14} />
+                          ) : null}
+                          <Text
+                            style={{
+                              color: theme.colors.foregroundMuted,
+                              fontSize: 12,
+                            }}
+                          >
+                            {columnTasks.length}
+                          </Text>
+                          {/* Rotated outside the strip's layout so the narrow width does not cut it. */}
+                          <View style={{ alignSelf: "stretch", height: 180 }}>
+                            {/* No numberOfLines: on web it caps the width at the 40px strip. */}
+                            <Text
+                              style={{
+                                position: "absolute",
+                                overflow: "hidden",
+                                top: 90 - 9,
+                                left: "50%",
+                                marginLeft: -90,
+                                width: 180,
+                                height: 18,
+                                lineHeight: 18,
+                                transform: [{ rotate: "90deg" }],
+                                color: theme.colors.foreground,
+                                fontSize: 13,
+                                fontWeight: "700",
+                              }}
+                            >
+                              {column.label}
+                            </Text>
+                          </View>
+                        </Pressable>
+                      );
+                    }
+
                     return (
                       <View
                         key={column.key}
@@ -1360,7 +1441,10 @@ function TasksBoardAndListShell({
                             paddingVertical: 2,
                           }}
                         >
-                          <View
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`Collapse ${column.label}`}
+                            onPress={() => toggleColumnCollapsed(column.key)}
                             style={{
                               flexDirection: "row",
                               alignItems: "center",
@@ -1391,7 +1475,7 @@ function TasksBoardAndListShell({
                             >
                               {columnTasks.length}
                             </Text>
-                          </View>
+                          </Pressable>
                           {status ? (
                             <Pressable
                               accessibilityRole="button"
