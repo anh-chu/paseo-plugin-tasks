@@ -961,6 +961,21 @@ describe("paseo-plugin-tasks", () => {
     });
   });
 
+  it("puts a task back in its old place when a move is undone with its old neighbors", () => {
+    const project = domain.createProject({ name: "Ops", prefix: "OPS", color: "blue" }).project;
+    const ids = ["A", "B", "C"].map((title) => {
+      const res = domain.createTask({ projectId: project.id, title, status: "todo" });
+      if (!res.ok) throw new Error("not created");
+      return res.task.id;
+    });
+    const order = () =>
+      domain.listTasks({ projectId: project.id, statuses: ["todo"] }).tasks.map((t) => t.title);
+    expect(domain.boardMove({ taskId: ids[1]!, status: "done" }).ok).toBe(true);
+    expect(order()).toEqual(["A", "C"]);
+    expect(domain.boardMove({ taskId: ids[1]!, status: "todo", beforeTaskId: ids[0]!, afterTaskId: ids[2]! }).ok).toBe(true);
+    expect(order()).toEqual(["A", "B", "C"]);
+  });
+
   describe("needs you and ideas", () => {
     type Handler = (event: unknown, context: unknown) => unknown;
     const hooks = new Map<string, Handler>();

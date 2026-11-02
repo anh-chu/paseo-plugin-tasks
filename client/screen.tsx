@@ -350,6 +350,31 @@ function TasksBoardAndListShell({
     void queryClient.invalidateQueries({ queryKey: ["tasks"] });
   };
 
+  // The last move, undoable for a few seconds.
+  const [lastMove, setLastMove] = useState<{
+    id: number;
+    message: string;
+    undo: () => Promise<{ ok: boolean; error?: { message: string } }>;
+  } | null>(null);
+  useEffect(() => {
+    if (!lastMove) return;
+    const timer = setTimeout(() => setLastMove(null), 8000);
+    return () => clearTimeout(timer);
+  }, [lastMove]);
+
+  async function handleUndoMove() {
+    if (!lastMove) return;
+    const move = lastMove;
+    setLastMove(null);
+    try {
+      const res = await move.undo();
+      if (!res.ok) toast.error(res.error?.message ?? "Could not undo");
+      invalidateAll();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function handleMoveStage(task: Task, targetStage: string | null) {
     try {
       const res = await updateTask({
@@ -361,6 +386,12 @@ function TasksBoardAndListShell({
         toast.error(res.error.message);
         return;
       }
+      setLastMove({
+        id: Date.now(),
+        message: `Moved ${task.key} to ${targetStage ?? "No stage"}`,
+        undo: () =>
+          updateTask({ taskId: task.id, stage: task.stage, authorName: "You" }),
+      });
       invalidateAll();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -368,6 +399,13 @@ function TasksBoardAndListShell({
   }
 
   async function handleMoveStatus(task: Task, targetStatus: TaskStatus) {
+    // Remember the neighbors so undo puts the task back in its old place.
+    const column = tasks
+      .filter((t) => t.projectId === task.projectId && t.status === task.status)
+      .sort((a, b) => a.position - b.position);
+    const index = column.findIndex((t) => t.id === task.id);
+    const beforeTaskId = column[index - 1]?.id ?? null;
+    const afterTaskId = column[index + 1]?.id ?? null;
     try {
       const res = await boardMove({
         taskId: task.id,
@@ -378,6 +416,18 @@ function TasksBoardAndListShell({
         toast.error(res.error.message);
         return;
       }
+      setLastMove({
+        id: Date.now(),
+        message: `Moved ${task.key} to ${STATUS_LABELS[targetStatus]}`,
+        undo: () =>
+          boardMove({
+            taskId: task.id,
+            status: task.status,
+            beforeTaskId,
+            afterTaskId,
+            authorName: "You",
+          }),
+      });
       invalidateAll();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -2028,6 +2078,59 @@ function TasksBoardAndListShell({
         initialTab={manageTab}
         theme={theme}
       />
+      {lastMove ? (
+        <View
+          key={lastMove.id}
+          style={{
+            position: "absolute",
+            bottom: 16,
+            alignSelf: "center",
+            left: 0,
+            right: 0,
+            alignItems: "center",
+          }}
+          pointerEvents="box-none"
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 12,
+              paddingLeft: 14,
+              paddingRight: 6,
+              paddingVertical: 6,
+              borderRadius: 8,
+              backgroundColor: theme.colors.surface2,
+              borderWidth: 1,
+              borderColor: theme.colors.border,
+            }}
+          >
+            <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
+              {lastMove.message}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => void handleUndoMove()}
+              style={{
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                borderRadius: 6,
+                backgroundColor: theme.colors.surface0,
+              }}
+            >
+              <Text
+                style={{
+                  color: theme.colors.foreground,
+                  fontSize: 13,
+                  fontWeight: "600",
+                }}
+              >
+                Undo
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
