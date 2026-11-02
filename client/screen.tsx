@@ -97,7 +97,7 @@ function TasksBoardAndListShell({
     null,
   );
   const [sortBy, setSortBy] = useState<TaskSort>("manual");
-  const [collapsedStatuses, setCollapsedStatuses] = useState<Set<TaskStatus>>(
+  const [collapsedStatuses, setCollapsedStatuses] = useState<Set<string>>(
     new Set(),
   );
 
@@ -177,7 +177,7 @@ function TasksBoardAndListShell({
       listTasks(
         needsYou
           ? {
-              statuses: ["in_review"],
+              needsYou: true,
               ...(priorityFilter ? { priorities: [priorityFilter] } : {}),
               ...(searchQuery.trim() ? { search: searchQuery.trim() } : {}),
               limit: TASKS_PAGE_MAX_LIMIT,
@@ -197,7 +197,7 @@ function TasksBoardAndListShell({
   const needsYouQuery = useQuery({
     queryKey: ["tasks", "needsYou"],
     queryFn: () =>
-      listTasks({ statuses: ["in_review"], limit: TASKS_PAGE_MAX_LIMIT }),
+      listTasks({ needsYou: true, limit: TASKS_PAGE_MAX_LIMIT }),
     refetchInterval: 4000,
   });
   const needsYouCount = needsYouQuery.data?.tasks.length ?? 0;
@@ -255,6 +255,49 @@ function TasksBoardAndListShell({
     }
     return map;
   }, [tasks]);
+
+  // Needs you groups tasks by why they need the user, most urgent first.
+  const listGroups = useMemo(() => {
+    if (!needsYou) {
+      return (
+        [
+          "in_progress",
+          "in_review",
+          "todo",
+          "backlog",
+          "done",
+          "canceled",
+        ] as const
+      ).map((status) => ({
+        key: status as string,
+        status: status as TaskStatus,
+        label: STATUS_LABELS[status],
+        tasks: tasksByStatus.get(status) ?? [],
+        canAdd: true,
+      }));
+    }
+    const reason = (t: Task) =>
+      t.idea
+        ? "idea"
+        : t.attention ?? (t.status === "in_review" ? "review" : null);
+    return (
+      [
+        { key: "waiting", status: "in_progress", label: "Waiting for approval" },
+        { key: "failed", status: "canceled", label: "Agent failed" },
+        { key: "review", status: "in_review", label: "In review" },
+        { key: "idea", status: "backlog", label: "Ideas" },
+      ] as const
+    )
+      .map((group) => ({
+        key: group.key as string,
+        status: group.status as TaskStatus,
+        label: group.label as string,
+        tasks: tasks.filter((t) => reason(t) === group.key),
+        canAdd: false,
+      }))
+      // Ideas always shows, so people learn that agents can propose them.
+      .filter((group) => group.tasks.length > 0 || group.key === "idea");
+  }, [needsYou, tasks, tasksByStatus]);
 
   const projectStages = currentProject?.stages ?? [];
   const groupByStage = groupBy === "stage" && projectStages.length > 0;
@@ -1745,22 +1788,13 @@ function TasksBoardAndListShell({
                     gap: 14,
                   }}
                 >
-                  {(needsYou
-                    ? (["in_review"] as const)
-                    : ([
-                        "in_progress",
-                        "in_review",
-                        "todo",
-                        "backlog",
-                        "done",
-                        "canceled",
-                      ] as const)
-                  ).map((status) => {
-                    const groupTasks = tasksByStatus.get(status) ?? [];
-                    const collapsed = collapsedStatuses.has(status);
+                  {listGroups.map((group) => {
+                    const { status } = group;
+                    const groupTasks = group.tasks;
+                    const collapsed = collapsedStatuses.has(group.key);
                     return (
                       <View
-                        key={status}
+                        key={group.key}
                         style={{
                           borderRadius: 10,
                           borderWidth: 1,
@@ -1774,8 +1808,8 @@ function TasksBoardAndListShell({
                           onPress={() =>
                             setCollapsedStatuses((prev) => {
                               const next = new Set(prev);
-                              if (next.has(status)) next.delete(status);
-                              else next.add(status);
+                              if (next.has(group.key)) next.delete(group.key);
+                              else next.add(group.key);
                               return next;
                             })
                           }
@@ -1807,7 +1841,7 @@ function TasksBoardAndListShell({
                                 fontWeight: "700",
                               }}
                             >
-                              {STATUS_LABELS[status]}
+                              {group.label}
                             </Text>
                             <Text
                               style={{
@@ -1818,6 +1852,7 @@ function TasksBoardAndListShell({
                               {groupTasks.length}
                             </Text>
                           </View>
+                          {group.canAdd ? (
                           <Pressable
                             accessibilityRole="button"
                             onPress={() => {
@@ -1840,6 +1875,7 @@ function TasksBoardAndListShell({
                               + Add
                             </Text>
                           </Pressable>
+                          ) : null}
                         </Pressable>
 
                         {!collapsed ? (
@@ -1852,7 +1888,9 @@ function TasksBoardAndListShell({
                                   fontSize: 12,
                                 }}
                               >
-                                No tasks in {STATUS_LABELS[status]}.
+                                {group.key === "idea"
+                                  ? "No ideas yet. Agents propose follow-ups they find here."
+                                  : `No tasks in ${group.label}.`}
                               </Text>
                             ) : (
                               groupTasks.map((task) => {

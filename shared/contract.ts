@@ -80,6 +80,8 @@ export const taskSchema = z
     dueDate: dueDateSchema.nullable(),
     parentTaskId: idSchema.nullable(),
     stage: z.string().nullable().default(null),
+    idea: z.boolean().default(false),
+    attention: z.enum(["waiting", "failed"]).nullable().default(null),
     position: z.number(),
     createdAt: z.string(),
     updatedAt: z.string(),
@@ -248,6 +250,7 @@ export const updateTaskInputSchema = z
     dueDate: dueDateSchema.nullable().optional(),
     parentTaskId: idSchema.nullable().optional(),
     stage: nonBlankStringSchema.nullable().optional(),
+    idea: z.literal(false).optional(),
     labelIds: taskLabelsSchema.optional(),
     authorName: nonBlankStringSchema.default("You"),
   })
@@ -261,6 +264,7 @@ export const updateTaskInputSchema = z
       input.dueDate !== undefined ||
       input.parentTaskId !== undefined ||
       input.stage !== undefined ||
+      input.idea !== undefined ||
       input.labelIds !== undefined,
     { message: "at least one task field must be updated" },
   );
@@ -534,6 +538,7 @@ export const listTasksRpc = defineRpc({
       priorities: z.array(taskPrioritySchema).optional(),
       labelIds: z.array(idSchema).optional(),
       activeOnly: z.boolean().default(false),
+      needsYou: z.boolean().default(false),
       parentTaskId: idSchema.nullable().optional(),
       search: z.string().optional(),
       sort: taskSortSchema.default("manual"),

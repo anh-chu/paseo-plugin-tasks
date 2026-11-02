@@ -61,7 +61,8 @@ status                                Show the installed Tasks plugin name and v
 project create|list|show|update       Manage projects, prefixes, Paseo project links, and stages (--stages "A,B,C", "" turns off)
 folder create|list|update|delete      Group projects into folders
 create                                Create a task (--project, --title, --description, --priority, --due, --label, --parent, --attach)
-list                                  List and filter tasks (--project, --status, --priority, --label, --active, --search, --sort, --limit, --cursor)
+propose <key-or-id>                   Propose a follow-up idea found while working on a task (--title, --description)
+list                                  List and filter tasks (--project, --status, --priority, --label, --active, --needs-you, --search, --sort, --limit, --cursor)
 show <key-or-id>                      Show the task, sub-tasks, comments, attachments, and attached agents
 update <key-or-id>                    Change status, priority, title, description, due date, parent, labels, or stage (--stage <name>, none clears)
 move <key-or-id>                      Move a task and its sub-tasks to another project
@@ -78,7 +79,7 @@ seed-demo --yes                       Create sample folders, projects, labels, t
 
 ### `tasks` MCP server
 
-The same operations are exposed as MCP tools: `tasks_projects`, `tasks_list`, `tasks_show`, `tasks_create`, `tasks_update`, `tasks_comment`, `tasks_delegate`, `tasks_attach`, and `tasks_detach`.
+The same operations are exposed as MCP tools: `tasks_projects`, `tasks_list`, `tasks_show`, `tasks_create`, `tasks_propose_idea`, `tasks_update`, `tasks_comment`, `tasks_delegate`, `tasks_attach`, and `tasks_detach`.
 
 With the **Require evidence before agents move a task to In review or Done** setting on (off by default), CLI and MCP status changes to `in_review` or `done` require a task comment for the current work cycle, and agents are told to write one:
 
@@ -94,6 +95,10 @@ Describe gaps or blockers, or say none.
 
 Choose one verdict: `PASS`, `PASS WITH GAPS`, `FAILED CHECK`, `NOTHING CHECKABLE`, or `BLOCKED`. Any verdict can enter review; `done` requires `PASS`, `PASS WITH GAPS`, or `NOTHING CHECKABLE`. Dispatching an agent or returning the card to an active state requires a new comment. This checks the comment's format; it does not verify its claims. The app's board and task controls remain available for manual changes. Setting `PASEO_TASKS_REQUIRE_EVIDENCE=0` in the daemon environment also turns the check off.
 
+### Ideas
+
+When an agent finds follow-up work (a bug, a limitation, a next step), it proposes an idea with `paseo-tasks propose ABC-12 --title "..."` or `tasks_propose_idea`, rather than creating a task. The idea waits under **Needs you** and stays off the board. Open it and choose **Accept idea** to move it to the backlog, or **Dismiss** to cancel it. The task the agent was working on gets a comment that names the idea.
+
 ### Task cards in replies
 
 An agent that writes `::task{key="ABC-12"}` on its own line gets a live task card in place of that line. Clicking the card opens the task.
@@ -107,7 +112,7 @@ A comment sent with **Notify agent** is delivered to the agent that last replied
 | Surface | Where |
 | --- | --- |
 | Tasks screen | Sidebar item, `/tasks [TASK-KEY]`, command center |
-| Needs you | Tasks screen navigation; every task and sub-task in review across projects, newest first |
+| Needs you | Tasks screen navigation; across projects, grouped by reason: an agent waiting for approval, an agent that failed, In review, and ideas agents proposed |
 | Workspace board panel | Workspace and explorer panels, command center |
 | Agent task inspector | Agent panel, `/task-panel`, composer pill |
 | Composer pill | Beside the composer for each agent; shows the linked task key |

@@ -171,6 +171,30 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: "tasks_propose_idea",
+    description:
+      "Propose a follow-up idea you found while working on a task (a bug, a limitation, a next step). It waits in the user's Needs you inbox until they accept or dismiss it. Use this instead of tasks_create unless the user asked you to create tasks.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: {
+          type: "string",
+          description: "Key of the task you were working on, such as PROD-1",
+        },
+        title: {
+          type: "string",
+          description: "Idea title",
+        },
+        description: {
+          type: "string",
+          description: "Markdown: what you found and why it matters",
+        },
+      },
+      required: ["key", "title"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "tasks_comment",
     description:
       "Add a substantive Markdown comment to a task, optionally notifying and resuming the latest responding agent.",
@@ -337,6 +361,18 @@ async function executeMcpToolCall(
       }
       if (typeof args.parent === "string" && args.parent) {
         argv.push("--parent", args.parent);
+      }
+      break;
+    case "tasks_propose_idea":
+      argv.push(
+        "propose",
+        String(args.key ?? ""),
+        "--title",
+        String(args.title ?? ""),
+        "--json",
+      );
+      if (typeof args.description === "string") {
+        argv.push("--description", args.description);
       }
       break;
     case "tasks_update":

@@ -286,6 +286,7 @@ export function TaskDetailView({
     patch: Partial<{
       status: TaskStatus;
       stage: string | null;
+      idea: false;
       priority: TaskPriority;
       dueDate: string | null;
       labelIds: string[];
@@ -491,6 +492,40 @@ export function TaskDetailView({
         </View>
 
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          {task.idea ? (
+            <>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void handleQuickUpdate({ idea: false })}
+                style={{
+                  paddingHorizontal: 9,
+                  paddingVertical: 5,
+                  borderRadius: 7,
+                  backgroundColor: theme.colors.accent,
+                }}
+              >
+                <Text style={{ color: theme.colors.accentForeground, fontSize: 12, fontWeight: "600" }}>
+                  Accept idea
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() =>
+                  void handleQuickUpdate({ idea: false, status: "canceled" })
+                }
+                style={{
+                  paddingHorizontal: 9,
+                  paddingVertical: 5,
+                  borderRadius: 7,
+                  backgroundColor: theme.colors.surface2,
+                }}
+              >
+                <Text style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "500" }}>
+                  Dismiss
+                </Text>
+              </Pressable>
+            </>
+          ) : null}
           <Pressable
             accessibilityRole="button"
             onPress={() => setEditingHeader((prev) => !prev)}
