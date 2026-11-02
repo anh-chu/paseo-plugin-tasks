@@ -53,6 +53,11 @@ export interface Task {
   idea: boolean;
   // Set while an agent on the open task waits for approval or has failed.
   attention: "waiting" | "failed" | null;
+  // Most urgent state across attached agent threads; null without threads.
+  agentStatus: "waiting" | "failed" | "working" | "idle" | "completed" | null;
+  // Latest agent comment (first 300 characters) and when the agent last spoke.
+  agentNote: string | null;
+  agentAt: string | null;
   position: number;
   createdAt: string;
   updatedAt: string;

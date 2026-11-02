@@ -976,6 +976,35 @@ describe("paseo-plugin-tasks", () => {
     expect(order()).toEqual(["A", "B", "C"]);
   });
 
+  it("lists each task's most urgent agent state with its latest agent comment", () => {
+    const project = domain.createProject({ name: "Ops", prefix: "OPS", color: "blue" }).project;
+    const res = domain.createTask({ projectId: project.id, title: "Run tests", status: "in_progress" });
+    if (!res.ok) throw new Error("not created");
+    const taskId = res.task.id;
+    const agentLine = () => {
+      const task = domain.listTasks({ projectId: project.id }).tasks[0]!;
+      return [task.agentStatus, task.agentNote];
+    };
+    expect(agentLine()).toEqual([null, null]);
+
+    const thread = (threadId: string, liveStatus: "working" | "idle" | "completed" | "failed") =>
+      store.tasks.upsertTaskThread({ taskId, threadId, workspaceId: null, presetName: "P", title: threadId, liveStatus });
+    thread("agent-a", "completed");
+    expect(agentLine()).toEqual(["completed", null]);
+    expect(domain.listTasks({ projectId: project.id }).tasks[0]!.agentAt).not.toBeNull();
+    thread("agent-b", "idle");
+    expect(agentLine()).toEqual(["idle", null]);
+    thread("agent-c", "working");
+    store.tasks.createComment({ taskId, kind: "agent", authorName: "Worker", threadId: "agent-c", body: "Running tests" });
+    store.tasks.createComment({ taskId, kind: "user", authorName: "You", body: "Thanks" });
+    expect(agentLine()).toEqual(["working", "Running tests"]);
+    thread("agent-b", "failed");
+    expect(agentLine()).toEqual(["failed", "Running tests"]);
+    store.db.prepare("UPDATE task_threads SET waiting_since = ? WHERE thread_id = 'agent-c'").run(new Date().toISOString());
+    expect(agentLine()).toEqual(["waiting", "Running tests"]);
+    expect(domain.getTask({ taskId }).task).toMatchObject({ agentStatus: "waiting", agentNote: "Running tests" });
+  });
+
   describe("needs you and ideas", () => {
     type Handler = (event: unknown, context: unknown) => unknown;
     const hooks = new Map<string, Handler>();

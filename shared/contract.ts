@@ -82,6 +82,12 @@ export const taskSchema = z
     stage: z.string().nullable().default(null),
     idea: z.boolean().default(false),
     attention: z.enum(["waiting", "failed"]).nullable().default(null),
+    agentStatus: z
+      .enum(["waiting", "failed", "working", "idle", "completed"])
+      .nullable()
+      .default(null),
+    agentNote: z.string().nullable().default(null),
+    agentAt: z.string().nullable().default(null),
     position: z.number(),
     createdAt: z.string(),
     updatedAt: z.string(),

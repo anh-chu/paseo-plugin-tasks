@@ -89,6 +89,9 @@ interface TaskRow {
   stage: string | null;
   idea: number;
   attention: Task["attention"];
+  agent_status: Task["agentStatus"];
+  agent_note: string | null;
+  agent_at: string | null;
   position: number;
   created_at: string;
   updated_at: string;
@@ -398,6 +401,46 @@ const TASK_ATTENTION_COLUMN = `
   END AS attention
 `;
 
+// The board's agent line: the most urgent state across a task's threads,
+// with the latest agent comment and when it was written.
+const TASK_AGENT_COLUMNS = `
+  CASE
+    WHEN NOT EXISTS (
+      SELECT 1 FROM task_threads tt WHERE tt.task_id = t.id
+    ) THEN NULL
+    WHEN EXISTS (
+      SELECT 1 FROM task_threads tt
+      WHERE tt.task_id = t.id AND tt.waiting_since IS NOT NULL
+    ) THEN 'waiting'
+    WHEN EXISTS (
+      SELECT 1 FROM task_threads tt
+      WHERE tt.task_id = t.id AND tt.live_status = 'failed'
+    ) THEN 'failed'
+    WHEN EXISTS (
+      SELECT 1 FROM task_threads tt
+      WHERE tt.task_id = t.id AND tt.live_status IN ('starting', 'working')
+    ) THEN 'working'
+    WHEN EXISTS (
+      SELECT 1 FROM task_threads tt
+      WHERE tt.task_id = t.id AND tt.live_status = 'idle'
+    ) THEN 'idle'
+    ELSE 'completed'
+  END AS agent_status,
+  (
+    SELECT substr(c.body, 1, 300) FROM comments c
+    WHERE c.task_id = t.id AND c.kind = 'agent'
+    ORDER BY c.created_at DESC, c.id DESC LIMIT 1
+  ) AS agent_note,
+  COALESCE(
+    (
+      SELECT c.created_at FROM comments c
+      WHERE c.task_id = t.id AND c.kind = 'agent'
+      ORDER BY c.created_at DESC, c.id DESC LIMIT 1
+    ),
+    (SELECT MAX(tt.updated_at) FROM task_threads tt WHERE tt.task_id = t.id)
+  ) AS agent_at
+`;
+
 function taskFromRow(row: TaskRow): Task {
   return {
     id: row.id,
@@ -413,6 +456,9 @@ function taskFromRow(row: TaskRow): Task {
     stage: row.stage,
     idea: row.idea === 1,
     attention: row.attention,
+    agentStatus: row.agent_status,
+    agentNote: row.agent_note,
+    agentAt: row.agent_at,
     position: row.position,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -552,7 +598,8 @@ export function createTasksStore(db: PluginDatabase) {
     "SELECT * FROM projects WHERE id = ?",
   );
   const taskSelect = `
-    SELECT t.*, p.prefix AS project_prefix, ${TASK_ATTENTION_COLUMN}
+    SELECT t.*, p.prefix AS project_prefix, ${TASK_ATTENTION_COLUMN},
+      ${TASK_AGENT_COLUMNS}
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
   `;
@@ -1102,6 +1149,7 @@ export function createTasksStore(db: PluginDatabase) {
                 t.*,
                 p.prefix AS project_prefix,
                 ${TASK_ATTENTION_COLUMN},
+                ${TASK_AGENT_COLUMNS},
                 CASE t.priority
                   WHEN 'urgent' THEN 0
                   WHEN 'high' THEN 1
