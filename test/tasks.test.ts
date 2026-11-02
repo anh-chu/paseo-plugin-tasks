@@ -961,6 +961,135 @@ describe("paseo-plugin-tasks", () => {
     });
   });
 
+  it("puts a task back in its old place when a move is undone with its old neighbors", () => {
+    const project = domain.createProject({ name: "Ops", prefix: "OPS", color: "blue" }).project;
+    const ids = ["A", "B", "C"].map((title) => {
+      const res = domain.createTask({ projectId: project.id, title, status: "todo" });
+      if (!res.ok) throw new Error("not created");
+      return res.task.id;
+    });
+    const order = () =>
+      domain.listTasks({ projectId: project.id, statuses: ["todo"] }).tasks.map((t) => t.title);
+    expect(domain.boardMove({ taskId: ids[1]!, status: "done" }).ok).toBe(true);
+    expect(order()).toEqual(["A", "C"]);
+    expect(domain.boardMove({ taskId: ids[1]!, status: "todo", beforeTaskId: ids[0]!, afterTaskId: ids[2]! }).ok).toBe(true);
+    expect(order()).toEqual(["A", "B", "C"]);
+  });
+
+  it("lists each task's most urgent agent state with its latest agent comment", () => {
+    const project = domain.createProject({ name: "Ops", prefix: "OPS", color: "blue" }).project;
+    const res = domain.createTask({ projectId: project.id, title: "Run tests", status: "in_progress" });
+    if (!res.ok) throw new Error("not created");
+    const taskId = res.task.id;
+    const agentLine = () => {
+      const task = domain.listTasks({ projectId: project.id }).tasks[0]!;
+      return [task.agentStatus, task.agentNote];
+    };
+    expect(agentLine()).toEqual([null, null]);
+
+    const thread = (threadId: string, liveStatus: "working" | "idle" | "completed" | "failed") =>
+      store.tasks.upsertTaskThread({ taskId, threadId, workspaceId: null, presetName: "P", title: threadId, liveStatus });
+    thread("agent-a", "completed");
+    expect(agentLine()).toEqual(["completed", null]);
+    expect(domain.listTasks({ projectId: project.id }).tasks[0]!.agentAt).not.toBeNull();
+    thread("agent-b", "idle");
+    expect(agentLine()).toEqual(["idle", null]);
+    thread("agent-c", "working");
+    store.tasks.createComment({ taskId, kind: "agent", authorName: "Worker", threadId: "agent-c", body: "Running tests" });
+    store.tasks.createComment({ taskId, kind: "user", authorName: "You", body: "Thanks" });
+    expect(agentLine()).toEqual(["working", "Running tests"]);
+    thread("agent-b", "failed");
+    expect(agentLine()).toEqual(["failed", "Running tests"]);
+    store.db.prepare("UPDATE task_threads SET waiting_since = ? WHERE thread_id = 'agent-c'").run(new Date().toISOString());
+    expect(agentLine()).toEqual(["waiting", "Running tests"]);
+    expect(domain.getTask({ taskId }).task).toMatchObject({ agentStatus: "waiting", agentNote: "Running tests" });
+  });
+
+  describe("needs you and ideas", () => {
+    type Handler = (event: unknown, context: unknown) => unknown;
+    const hooks = new Map<string, Handler>();
+    const fire = (name: string, event: unknown) =>
+      hooks.get(name)!(event, { paseo: mockPaseo, signal: new AbortController().signal });
+    const agentRef = (id: string) => ({ id, workspaceId: null, parentAgentId: null, provider: "codex", cwd: "/tmp", title: null });
+    const needsYou = () =>
+      domain.listTasks({ needsYou: true, limit: 100 }).tasks.map((t) => [t.key, t.idea, t.attention]);
+
+    beforeEach(() => {
+      hooks.clear();
+      registerLifecycleHooks({ on: (name: string, handler: Handler) => hooks.set(name, handler) } as never, store, () => {});
+    });
+
+    it("lists tasks waiting for approval, failed, or in review until they are handled", async () => {
+      const project = domain.createProject({ name: "Ops", prefix: "OPS", color: "blue" }).project;
+      const create = (title: string, status: "in_progress" | "in_review" | "done") => {
+        const res = domain.createTask({ projectId: project.id, title, status });
+        if (!res.ok) throw new Error("not created");
+        return res.task;
+      };
+      const waiting = create("Waits for approval", "in_progress");
+      const failed = create("Agent failed", "in_progress");
+      const closed = create("Done but failed", "done");
+      create("In review", "in_review");
+      create("Quiet", "in_progress");
+      store.tasks.upsertTaskThread({ taskId: waiting.id, threadId: "agent-a", workspaceId: null, presetName: "P", title: "A", liveStatus: "working" });
+      store.tasks.upsertTaskThread({ taskId: failed.id, threadId: "agent-b", workspaceId: null, presetName: "P", title: "B", liveStatus: "working" });
+      store.tasks.upsertTaskThread({ taskId: closed.id, threadId: "agent-c", workspaceId: null, presetName: "P", title: "C", liveStatus: "failed" });
+
+      expect(needsYou()).toEqual([["OPS-4", false, null]]);
+
+      await fire("agent.permission_requested", { agent: agentRef("agent-a"), request: { id: "r1", name: "Bash", kind: "tool" } });
+      await fire("agent.turn_ended", { agent: agentRef("agent-b"), turnId: "t", outcome: { kind: "failed", error: { message: "boom" } }, timeline: [] });
+      expect(needsYou()).toEqual(
+        expect.arrayContaining([["OPS-1", false, "waiting"], ["OPS-2", false, "failed"], ["OPS-4", false, null]]),
+      );
+      expect(needsYou()).toHaveLength(3);
+
+      await fire("agent.permission_resolved", { agent: agentRef("agent-a"), requestId: "r1", resolution: { behavior: "allow" } });
+      await fire("agent.turn_started", { agent: agentRef("agent-b"), turnId: "t2" });
+      expect(needsYou()).toEqual([["OPS-4", false, null]]);
+    });
+
+    it("keeps proposed ideas off the board until the user accepts or dismisses them", async () => {
+      const project = domain.createProject({ name: "Ops", prefix: "OPS", color: "blue" }).project;
+      domain.createTask({ projectId: project.id, title: "Migrate the runner", status: "in_progress" });
+
+      const proposed = await runTasksCli(["propose", "OPS-1", "--title", "Flaky login test", "--description", "Fails 1 in 5 runs."], store, domain);
+      expect(proposed).toMatchObject({ exitCode: 0, stdout: "Proposed OPS-2  Flaky login test" });
+      const bridge = await startTasksBridge(store, domain);
+      try {
+        const res = await fetch(`${bridge.url}/mcp`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${bridge.token}` },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "tasks_propose_idea", arguments: { key: "OPS-1", title: "Cache the fixtures" } } }),
+        }).then((r) => r.json());
+        expect(res.result.isError).toBe(false);
+      } finally {
+        await bridge.close();
+      }
+
+      expect(domain.listTasks({}).tasks.map((t) => t.key)).toEqual(["OPS-1"]);
+      expect(needsYou()).toEqual(expect.arrayContaining([["OPS-2", true, null], ["OPS-3", true, null]]));
+      expect(domain.getTaskByKey({ taskKey: "OPS-2" }).task?.description).toBe("Fails 1 in 5 runs.\n\nProposed while working on OPS-1.");
+      const source = domain.getTaskByKey({ taskKey: "OPS-1" }).task!;
+      expect((await domain.listComments({ taskId: source.id }, null)).comments.map((c) => c.body)).toContain(
+        "Proposed idea OPS-2: Flaky login test",
+      );
+
+      const accept = domain.getTaskByKey({ taskKey: "OPS-2" }).task!;
+      domain.updateTask({ taskId: accept.id, idea: false });
+      const dismiss = domain.getTaskByKey({ taskKey: "OPS-3" }).task!;
+      domain.updateTask({ taskId: dismiss.id, idea: false, status: "canceled" });
+
+      expect(needsYou()).toEqual([]);
+      expect(domain.listTasks({}).tasks.map((t) => [t.key, t.status])).toEqual(
+        expect.arrayContaining([["OPS-2", "backlog"], ["OPS-3", "canceled"]]),
+      );
+      const bodies = async (taskId: string) => (await domain.listComments({ taskId }, null)).comments.map((c) => c.body);
+      expect(await bodies(accept.id)).toContain("Idea accepted by You");
+      expect(await bodies(dismiss.id)).toContain("Idea dismissed by You");
+    });
+  });
+
   it("transforms ::task{key=...} directives in assistant timeline messages", () => {
     const message = [
       "I created and started working on the task:",

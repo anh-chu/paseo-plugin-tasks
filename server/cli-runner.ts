@@ -147,6 +147,7 @@ function parseArgv(argv: readonly string[]): ParsedArgs {
     "yes",
     "notify",
     "active",
+    "needs-you",
     "no-folder",
     "unlink-bb-project",
     "unlink-project",
@@ -255,7 +256,8 @@ Commands:
   project create|list|show|update     Manage tracker projects, prefixes, Paseo project links, and stages (--stages "A,B,C", "" turns off)
   folder create|list|update|delete    Organize tracker projects into folders
   create                              Create a task (--project, --title, --description, --priority, --due, --label, --parent, --attach)
-  list                                List and filter tasks (--project, --status, --priority, --label, --active, --search, --sort, --limit, --cursor)
+  propose <key-or-id>                 Propose a follow-up idea found while working on a task (--title, --description); the user accepts or dismisses it
+  list                                List and filter tasks (--project, --status, --priority, --label, --active, --needs-you, --search, --sort, --limit, --cursor)
   show <key-or-id>                    Show full task record, subtasks, comments, attachments, and attached agents
   update <key-or-id>                  Update status, priority, title, description, due date, parent, labels, or stage (--stage <name>, none clears)
   move <key-or-id>                    Move a task and its subtasks to --project
@@ -756,6 +758,53 @@ export async function runTasksCli(
       };
     }
 
+    if (cmd0 === "propose") {
+      if (!cmd1) {
+        throw new TasksCliError("missing required <key-or-id>", {
+          code: "missing_required",
+        });
+      }
+      const source = resolveTask(domain, cmd1);
+      const title = getFlag(parsed, "title", "name", "subject");
+      if (!title) {
+        throw new TasksCliError("missing required option --title", {
+          code: "missing_required",
+        });
+      }
+      const description =
+        (await readTextOption(
+          cwd,
+          getFlag(parsed, "description", "body", "details", "text", "content"),
+          getFlag(parsed, "description-file"),
+        )) ?? "";
+      const created = domain.createTask({
+        projectId: source.projectId,
+        title,
+        description: `${description}\n\nProposed while working on ${source.key}.`.trim(),
+        idea: true,
+      });
+      if (!created.ok) throw new TasksCliError(created.error.message);
+      const task = created.task;
+      await domain.createComment({
+        taskId: source.id,
+        kind: invokingThreadId ? "agent" : "user",
+        authorName:
+          getFlag(parsed, "author") ??
+          (invokingThreadId ? `agent (${invokingThreadId})` : "cli"),
+        presetName: null,
+        threadId: invokingThreadId ?? null,
+        body: `Proposed idea ${task.key}: ${task.title}`,
+        notify: false,
+        awaitDelivery: true,
+      });
+      return {
+        exitCode: 0,
+        stdout: wantJson
+          ? JSON.stringify({ task })
+          : `Proposed ${task.key}  ${task.title}`,
+      };
+    }
+
     // Task list
     if (cmd0 === "list") {
       const project = selectedProject(
@@ -819,6 +868,7 @@ export async function runTasksCli(
         priorities: priorities.length > 0 ? priorities : undefined,
         labelIds: labelIds.length > 0 ? labelIds : undefined,
         activeOnly: parsed.booleans.has("active"),
+        needsYou: parsed.booleans.has("needs-you"),
         search: getFlag(parsed, "search", "query", "q"),
         sort,
         limit,

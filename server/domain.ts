@@ -995,6 +995,7 @@ export function createDomainHandlers(
       dueDate?: string | null;
       parentTaskId?: string | null;
       labelIds?: string[];
+      idea?: boolean;
     }) {
       try {
         validateTaskParent(store, input.projectId, input.parentTaskId ?? null);
@@ -1008,6 +1009,7 @@ export function createDomainHandlers(
             priority: input.priority ?? "none",
             dueDate: input.dueDate ?? null,
             parentTaskId: input.parentTaskId ?? null,
+            idea: input.idea,
           });
           replaceTaskLabels(store, created.id, input.labelIds ?? []);
           return apiTask(store, created);
@@ -1035,6 +1037,7 @@ export function createDomainHandlers(
       dueDate?: string | null;
       parentTaskId?: string | null;
       stage?: string | null;
+      idea?: false;
       labelIds?: string[];
       authorName?: string;
     }) {
@@ -1067,12 +1070,20 @@ export function createDomainHandlers(
             dueDate: input.dueDate,
             parentTaskId: input.parentTaskId,
             stage,
+            idea: input.idea,
           });
           if (input.labelIds) {
             replaceTaskLabels(store, current.id, input.labelIds);
           }
 
           const bodies: string[] = [];
+          if (current.idea && !updated.idea) {
+            bodies.push(
+              updated.status === "canceled"
+                ? `Idea dismissed by ${authorName}`
+                : `Idea accepted by ${authorName}`,
+            );
+          }
           if (updated.status !== current.status) {
             bodies.push(
               `Status changed to ${displayName(updated.status)} by ${authorName}`,
@@ -1135,6 +1146,7 @@ export function createDomainHandlers(
       priorities?: StoredTask["priority"][];
       labelIds?: string[];
       activeOnly?: boolean;
+      needsYou?: boolean;
       parentTaskId?: string | null;
       search?: string;
       sort?: "manual" | "priority" | "due";
@@ -1147,6 +1159,7 @@ export function createDomainHandlers(
         priorities: input.priorities,
         labelIds: input.labelIds,
         activeOnly: input.activeOnly,
+        needsYou: input.needsYou,
         parentTaskId: input.parentTaskId,
         search: input.search,
         sort: input.sort,
@@ -2302,6 +2315,7 @@ export function registerLifecycleHooks(
 
   server.on("agent.turn_ended", async ({ agent, outcome, timeline }, { paseo }) => {
     onPaseoCaptured(paseo);
+    store.tasks.setTaskThreadsWaiting(agent.id, false);
     const silent = (await reportSilentStops())
       ? silentWorkerThreads(store, agent.id)
       : [];
@@ -2316,13 +2330,25 @@ export function registerLifecycleHooks(
     }
   });
 
+  server.on("agent.permission_requested", ({ agent }, { paseo }) => {
+    onPaseoCaptured(paseo);
+    store.tasks.setTaskThreadsWaiting(agent.id, true);
+  });
+
+  server.on("agent.permission_resolved", ({ agent }, { paseo }) => {
+    onPaseoCaptured(paseo);
+    store.tasks.setTaskThreadsWaiting(agent.id, false);
+  });
+
   server.on("agent.closed", ({ agent }, { paseo }) => {
     onPaseoCaptured(paseo);
+    store.tasks.setTaskThreadsWaiting(agent.id, false);
     transitionTrackedThread(store, agent.id, "completed");
   });
 
   server.on("agent.archived", ({ agent }, { paseo }) => {
     onPaseoCaptured(paseo);
+    store.tasks.setTaskThreadsWaiting(agent.id, false);
     transitionTrackedThread(store, agent.id, "completed");
   });
 }
