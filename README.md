@@ -2,11 +2,11 @@
 
 **A local task tracker in Paseo: kanban board and grouped list, subtasks, comments, attachments, and one-click delegation to a coding agent that reports back to the same task.**
 
-![Kanban board with Backlog, Todo, In Progress, and In Review columns](assets/screenshot-board.png)
+![Kanban board with a quick-create input per column and each card's agent status line](assets/screenshot-board.png)
 
-![Grouped list view with In Progress, In Review, Todo, Backlog, Done, and Canceled groups](assets/screenshot-list.png)
+![Grouped list view with agent status lines under task titles](assets/screenshot-list.png)
 
-![Task detail with status, priority, labels, delegation presets, sub-tasks, and worker threads](assets/screenshot-detail.png)
+![Task detail with status and priority menus, delegation presets, sub-tasks, and worker threads](assets/screenshot-detail.png)
 
 Ported from the `tasks` plugin in the [BB](https://github.com/get-bb/bb) monorepo (MIT) to Paseo's native screens, panels, composer pills, timeline renderers, and daemon RPC architecture.
 
