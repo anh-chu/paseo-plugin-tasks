@@ -10,6 +10,8 @@ import {
   type TaskStatus,
   type TaskThreadLiveStatus,
 } from "../shared/constants";
+import type { Task } from "../shared/contract";
+import { agentExcerpt } from "./board-logic";
 
 export function statusIconName(status: TaskStatus): string {
   switch (status) {
@@ -315,4 +317,65 @@ export function formatRelativeTime(iso: string): string {
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
   if (diffSec < 86400 * 7) return `${Math.floor(diffSec / 86400)}d ago`;
   return iso.slice(0, 10);
+}
+
+const AGENT_STATUS_LABELS: Readonly<
+  Record<NonNullable<Task["agentStatus"]>, string>
+> = {
+  waiting: "Waiting for approval",
+  failed: "Failed",
+  working: "Working",
+  idle: "Idle",
+  completed: "Completed",
+};
+
+// One line under a card: the agents' state, what they last said, and when.
+export function AgentLine({ task, theme }: { task: Task; theme: PluginTheme }) {
+  if (!task.agentStatus) return null;
+  const color =
+    task.agentStatus === "waiting"
+      ? theme.colors.statusWarning
+      : task.agentStatus === "failed"
+        ? theme.colors.statusDanger
+        : task.agentStatus === "working"
+          ? "#f59e0b"
+          : task.agentStatus === "completed"
+            ? theme.colors.statusSuccess
+            : theme.colors.foregroundMuted;
+  const text =
+    task.agentStatus === "waiting" || task.agentStatus === "failed"
+      ? AGENT_STATUS_LABELS[task.agentStatus]
+      : agentExcerpt(task.agentNote) ?? AGENT_STATUS_LABELS[task.agentStatus];
+  return (
+    <View
+      accessibilityLabel={`Agent ${AGENT_STATUS_LABELS[task.agentStatus]}`}
+      style={{ flexDirection: "row", alignItems: "center", gap: 6, minWidth: 0 }}
+    >
+      <View
+        style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color }}
+      />
+      <Text
+        numberOfLines={1}
+        style={{
+          flexShrink: 1,
+          color: theme.colors.foregroundMuted,
+          fontSize: 11,
+        }}
+      >
+        {text}
+      </Text>
+      {task.agentAt ? (
+        <Text
+          numberOfLines={1}
+          style={{
+            flexShrink: 0,
+            color: theme.colors.foregroundMuted,
+            fontSize: 11,
+          }}
+        >
+          · {formatRelativeTime(task.agentAt)}
+        </Text>
+      ) : null}
+    </View>
+  );
 }

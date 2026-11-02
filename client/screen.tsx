@@ -12,7 +12,7 @@ import {
 import { Icon, TextInput, useToast } from "@getpaseo/plugin/client/react-native";
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import {
   PRIORITY_LABELS,
@@ -27,6 +27,7 @@ import {
 } from "../shared/constants";
 import {
   boardMoveRpc,
+  createTaskRpc,
   getAgentTasksRpc,
   listFoldersRpc,
   listLabelsRpc,
@@ -42,6 +43,7 @@ import {
 } from "../shared/contract";
 import { tasksSettings } from "../shared/settings";
 import {
+  AgentLine,
   LabelPill,
   PriorityBadge,
   PriorityIcon,
@@ -50,7 +52,27 @@ import {
   StatusIcon,
 } from "./badges";
 import { TaskDetailView } from "./detail-view";
+import {
+  columnAt,
+  currentNeighbors,
+  dropIndex,
+  dropNeighbors,
+  type Neighbors,
+} from "./board-logic";
+import {
+  DraggableCard,
+  DropLine,
+  type BoardDrag,
+  type Point,
+} from "./board-drag";
+import { MenuButton, MenuProvider, type MenuItem } from "./menu";
 import { ManageModal, NewTaskModal } from "./modals";
+
+const SORT_LABELS: Readonly<Record<TaskSort, string>> = {
+  manual: "Manual",
+  priority: "Priority",
+  due: "Due date",
+};
 
 function TasksBoardAndListShell({
   theme,
@@ -79,6 +101,7 @@ function TasksBoardAndListShell({
   const listLabels = useRpc(listLabelsRpc);
   const boardMove = useRpc(boardMoveRpc);
   const updateTask = useRpc(updateTaskRpc);
+  const createTask = useRpc(createTaskRpc);
   const sidebarSummary = useRpc(sidebarSummaryRpc);
   const seedDemo = useRpc(seedDemoRpc);
 
@@ -346,6 +369,16 @@ function TasksBoardAndListShell({
     );
   }
 
+  const toolbarMenuStyle = {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 6,
+    backgroundColor: theme.colors.surface2,
+  };
+
   const invalidateAll = () => {
     void queryClient.invalidateQueries({ queryKey: ["tasks"] });
   };
@@ -398,18 +431,18 @@ function TasksBoardAndListShell({
     }
   }
 
-  async function handleMoveStatus(task: Task, targetStatus: TaskStatus) {
+  async function handleMoveStatus(
+    task: Task,
+    targetStatus: TaskStatus,
+    neighbors?: Neighbors,
+  ) {
     // Remember the neighbors so undo puts the task back in its old place.
-    const column = tasks
-      .filter((t) => t.projectId === task.projectId && t.status === task.status)
-      .sort((a, b) => a.position - b.position);
-    const index = column.findIndex((t) => t.id === task.id);
-    const beforeTaskId = column[index - 1]?.id ?? null;
-    const afterTaskId = column[index + 1]?.id ?? null;
+    const { beforeTaskId, afterTaskId } = currentNeighbors(tasks, task);
     try {
       const res = await boardMove({
         taskId: task.id,
         status: targetStatus,
+        ...neighbors,
         authorName: "You",
       });
       if (!res.ok) {
@@ -418,7 +451,10 @@ function TasksBoardAndListShell({
       }
       setLastMove({
         id: Date.now(),
-        message: `Moved ${task.key} to ${STATUS_LABELS[targetStatus]}`,
+        message:
+          targetStatus === task.status
+            ? `Moved ${task.key}`
+            : `Moved ${task.key} to ${STATUS_LABELS[targetStatus]}`,
         undo: () =>
           boardMove({
             taskId: task.id,
@@ -433,6 +469,202 @@ function TasksBoardAndListShell({
       toast.error(error instanceof Error ? error.message : String(error));
     }
   }
+
+  function statusMenuItems(task: Task): MenuItem[] {
+    return TASK_STATUSES.map((s) => ({
+      key: s,
+      label: STATUS_LABELS[s],
+      icon: <StatusIcon status={s} theme={theme} size={12} />,
+      selected: task.status === s,
+      onSelect: () => {
+        if (s !== task.status) void handleMoveStatus(task, s);
+      },
+    }));
+  }
+
+  function stageMenuItems(task: Task): MenuItem[] {
+    const taskStage =
+      task.stage !== null && projectStages.includes(task.stage)
+        ? task.stage
+        : null;
+    return [null, ...projectStages].map((stage) => ({
+      key: stage ?? "",
+      label: stage ?? "No stage",
+      selected: taskStage === stage,
+      onSelect: () => {
+        if (stage !== taskStage) void handleMoveStage(task, stage);
+      },
+    }));
+  }
+
+  const cardMenuStyle = {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 2,
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+    borderRadius: 5,
+  };
+
+  // Quick-create goes to the open project, else the one last created in.
+  const [lastUsedProjectId, setLastUsedProjectId] = useState<string | null>(
+    null,
+  );
+  const quickCreateProject =
+    currentProject ??
+    (lastUsedProjectId ? projectById.get(lastUsedProjectId) : undefined) ??
+    projectById.get(
+      [...tasks].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+        ?.projectId ?? "",
+    ) ??
+    projects[0] ??
+    null;
+
+  async function handleQuickCreate(
+    column: (typeof boardColumns)[number],
+    project: Project,
+    title: string,
+  ): Promise<boolean> {
+    try {
+      const res = await createTask({
+        projectId: project.id,
+        title,
+        status: column.status ?? "todo",
+        priority: "none",
+      });
+      if (!res.ok) {
+        toast.error(res.error.message);
+        return false;
+      }
+      setLastUsedProjectId(project.id);
+      if (!column.status && column.stage !== null) {
+        const staged = await updateTask({
+          taskId: res.task.id,
+          stage: column.stage,
+          authorName: "You",
+        });
+        if (!staged.ok) toast.error(staged.error.message);
+      }
+      invalidateAll();
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  }
+
+  // Board drag and drop. Geometry is measured when a drag starts; the board
+  // and its columns stop scrolling until it ends.
+  const [drag, setDrag] = useState<{
+    taskId: string;
+    point: Point;
+    columnKey: string | null;
+    index: number;
+  } | null>(null);
+  const dragLive = useRef(drag);
+  const shellView = useRef<View>(null);
+  const columnViews = useRef(new Map<string, View>());
+  const cardViews = useRef(new Map<string, View>());
+  const geometry = useRef({
+    origin: { x: 0, y: 0 },
+    columns: [] as { key: string; x: number; width: number }[],
+    cards: new Map<string, { y: number; height: number }>(),
+  });
+  const suppressPressUntil = useRef(0);
+
+  function dragTarget(taskId: string, point: Point) {
+    const columnKey = columnAt(point.x, geometry.current.columns);
+    const column = boardColumns.find((c) => c.key === columnKey);
+    const cards = (column?.tasks ?? [])
+      .filter((t) => t.id !== taskId)
+      .map((t) => geometry.current.cards.get(t.id) ?? { y: 0, height: 0 });
+    return { columnKey, index: dropIndex(point.y, cards) };
+  }
+
+  function setDragPoint(point: Point) {
+    const live = dragLive.current;
+    if (!live) return;
+    dragLive.current = { ...live, point, ...dragTarget(live.taskId, point) };
+    setDrag(dragLive.current);
+  }
+
+  async function handleDrop(
+    task: Task,
+    columnKey: string | null,
+    index: number,
+  ) {
+    const column = boardColumns.find((c) => c.key === columnKey);
+    if (!column) return;
+    if (!column.status) {
+      const taskStage =
+        task.stage !== null && projectStages.includes(task.stage)
+          ? task.stage
+          : null;
+      if (column.stage !== taskStage) {
+        await handleMoveStage(task, column.stage);
+        return;
+      }
+    }
+    const status = column.status ?? task.status;
+    const reorder = sortBy === "manual";
+    if (status === task.status && !reorder) return;
+    const neighbors = reorder
+      ? dropNeighbors(column.tasks, task, index, status)
+      : { beforeTaskId: null, afterTaskId: null };
+    if (status === task.status) {
+      const old = currentNeighbors(tasks, task);
+      if (!neighbors.beforeTaskId && !neighbors.afterTaskId) return;
+      if (
+        neighbors.beforeTaskId === old.beforeTaskId &&
+        neighbors.afterTaskId === old.afterTaskId
+      ) {
+        return;
+      }
+    }
+    await handleMoveStatus(task, status, neighbors);
+  }
+
+  const boardDrag: BoardDrag = {
+    start(taskId, point) {
+      dragLive.current = { taskId, point, columnKey: null, index: 0 };
+      setDrag(dragLive.current);
+      shellView.current?.measureInWindow((x, y) => {
+        geometry.current.origin = { x, y };
+      });
+      geometry.current.columns = [];
+      geometry.current.cards = new Map();
+      columnViews.current.forEach((view, key) =>
+        view.measureInWindow((x, _y, width) => {
+          geometry.current.columns = [
+            ...geometry.current.columns.filter((c) => c.key !== key),
+            { key, x, width },
+          ];
+          if (dragLive.current) setDragPoint(dragLive.current.point);
+        }),
+      );
+      cardViews.current.forEach((view, id) =>
+        view.measureInWindow((_x, y, _width, height) => {
+          geometry.current.cards.set(id, { y, height });
+          if (dragLive.current) setDragPoint(dragLive.current.point);
+        }),
+      );
+    },
+    move: setDragPoint,
+    end(point) {
+      const live = dragLive.current;
+      dragLive.current = null;
+      setDrag(null);
+      suppressPressUntil.current = Date.now() + 300;
+      if (!live) return;
+      const task = tasks.find((t) => t.id === live.taskId);
+      const target = dragTarget(live.taskId, point);
+      if (task) void handleDrop(task, target.columnKey, target.index);
+    },
+    cancel() {
+      dragLive.current = null;
+      setDrag(null);
+    },
+  };
 
   async function handleSeedDemo() {
     setSeeding(true);
@@ -483,6 +715,7 @@ function TasksBoardAndListShell({
 
   return (
     <View
+      ref={shellView}
       style={{
         flex: 1,
         flexDirection: compact ? "column" : "row",
@@ -521,30 +754,6 @@ function TasksBoardAndListShell({
                 Tasks
               </Text>
             </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="New task"
-              onPress={() => {
-                setNewTaskDefaultStatus("todo");
-                setNewTaskOpen(true);
-              }}
-              style={{
-                paddingHorizontal: 8,
-                paddingVertical: 4,
-                borderRadius: 6,
-                backgroundColor: theme.colors.accent,
-              }}
-            >
-              <Text
-                style={{
-                  color: theme.colors.accentForeground,
-                  fontSize: 11,
-                  fontWeight: "700",
-                }}
-              >
-                + Task
-              </Text>
-            </Pressable>
           </View>
 
           <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 4 }}>
@@ -1283,69 +1492,70 @@ function TasksBoardAndListShell({
             </View>
 
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-              {TASK_PRIORITIES.filter((p) => p !== "none").map((p) => {
-                const active = priorityFilter === p;
-                return (
-                  <Pressable
-                    key={p}
-                    accessibilityRole="button"
-                    onPress={() =>
-                      setPriorityFilter((prev) => (prev === p ? null : p))
-                    }
-                    style={{
-                      paddingHorizontal: 8,
-                      paddingVertical: 5,
-                      borderRadius: 6,
-                      backgroundColor: active
-                        ? theme.colors.accent
-                        : theme.colors.surface2,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: active
-                          ? theme.colors.accentForeground
-                          : theme.colors.foreground,
-                        fontSize: 11,
-                        fontWeight: active ? "700" : "500",
-                      }}
-                    >
-                      {PRIORITY_LABELS[p]}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+              <MenuButton
+                accessibilityLabel="Filter by priority"
+                items={() => [
+                  {
+                    key: "all",
+                    label: "All priorities",
+                    selected: priorityFilter === null,
+                    onSelect: () => setPriorityFilter(null),
+                  },
+                  ...TASK_PRIORITIES.filter((p) => p !== "none").map((p) => ({
+                    key: p,
+                    label: PRIORITY_LABELS[p],
+                    icon: <PriorityIcon priority={p} theme={theme} size={12} />,
+                    selected: priorityFilter === p,
+                    onSelect: () => setPriorityFilter(p),
+                  })),
+                ]}
+                style={toolbarMenuStyle}
+              >
+                <Icon
+                  name="Filter"
+                  size={12}
+                  color={theme.colors.foregroundMuted}
+                />
+                <Text
+                  style={{
+                    color: theme.colors.foreground,
+                    fontSize: 11,
+                    fontWeight: priorityFilter ? "700" : "500",
+                  }}
+                >
+                  {priorityFilter ? PRIORITY_LABELS[priorityFilter] : "Filter"}
+                </Text>
+              </MenuButton>
 
-              {(needsYou ? [] : TASK_SORTS).map((s) => {
-                const active = sortBy === s;
-                return (
-                  <Pressable
-                    key={s}
-                    accessibilityRole="button"
-                    onPress={() => setSortBy(s)}
+              {needsYou ? null : (
+                <MenuButton
+                  accessibilityLabel="Sort tasks"
+                  items={() =>
+                    TASK_SORTS.map((s) => ({
+                      key: s,
+                      label: SORT_LABELS[s],
+                      selected: sortBy === s,
+                      onSelect: () => setSortBy(s),
+                    }))
+                  }
+                  style={toolbarMenuStyle}
+                >
+                  <Icon
+                    name="ArrowUpDown"
+                    size={12}
+                    color={theme.colors.foregroundMuted}
+                  />
+                  <Text
                     style={{
-                      paddingHorizontal: 8,
-                      paddingVertical: 5,
-                      borderRadius: 6,
-                      borderWidth: 1,
-                      borderColor: active
-                        ? theme.colors.accent
-                        : theme.colors.border,
-                      backgroundColor: theme.colors.surface2,
+                      color: theme.colors.foreground,
+                      fontSize: 11,
+                      fontWeight: "500",
                     }}
                   >
-                    <Text
-                      style={{
-                        color: theme.colors.foreground,
-                        fontSize: 11,
-                        fontWeight: active ? "700" : "400",
-                      }}
-                    >
-                      Sort: {s}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+                    Sort: {SORT_LABELS[sortBy]}
+                  </Text>
+                </MenuButton>
+              )}
             </View>
           </View>
         </View>
@@ -1438,17 +1648,26 @@ function TasksBoardAndListShell({
               {viewMode === "board" && !needsYou ? (
                 <ScrollView
                   horizontal
+                  scrollEnabled={!drag}
                   style={{ flex: 1 }}
                   contentContainerStyle={{
                     padding: compact ? 12 : 16,
                     gap: 12,
                   }}
                 >
-                  {boardColumns.map((column, columnIdx) => {
+                  {boardColumns.map((column) => {
                     const { status } = column;
                     const columnTasks = column.tasks;
-                    const prevColumn = boardColumns[columnIdx - 1];
-                    const nextColumn = boardColumns[columnIdx + 1];
+                    const dropTarget = drag?.columnKey === column.key;
+                    const draggedTask = drag
+                      ? tasks.find((t) => t.id === drag.taskId)
+                      : undefined;
+                    // The insertion line shows where a manual-order drop lands.
+                    const dropLineAt =
+                      dropTarget && sortBy === "manual" ? drag.index : null;
+                    const otherTasks = columnTasks.filter(
+                      (t) => t.id !== drag?.taskId,
+                    );
 
                     if (collapsedColumns.includes(columnCollapseKey(column.key))) {
                       return (
@@ -1515,12 +1734,19 @@ function TasksBoardAndListShell({
                     return (
                       <View
                         key={column.key}
+                        ref={(view) => {
+                          if (view) columnViews.current.set(column.key, view);
+                          else columnViews.current.delete(column.key);
+                        }}
                         style={{
                           width: compact ? 260 : 285,
                           borderRadius: 12,
                           backgroundColor: theme.colors.surface1,
                           borderWidth: 1,
-                          borderColor: theme.colors.border,
+                          borderColor:
+                            dropTarget && draggedTask
+                              ? theme.colors.foregroundMuted
+                              : theme.colors.border,
                           padding: 10,
                           gap: 8,
                         }}
@@ -1569,30 +1795,22 @@ function TasksBoardAndListShell({
                               {columnTasks.length}
                             </Text>
                           </Pressable>
-                          {status ? (
-                            <Pressable
-                              accessibilityRole="button"
-                              accessibilityLabel={`Add task to ${column.label}`}
-                              onPress={() => {
-                                setNewTaskDefaultStatus(status);
-                                setNewTaskOpen(true);
-                              }}
-                              style={{
-                                padding: 4,
-                                borderRadius: 6,
-                                backgroundColor: theme.colors.surface2,
-                              }}
-                            >
-                              <Icon
-                                name="Plus"
-                                size={12}
-                                color={theme.colors.foreground}
-                              />
-                            </Pressable>
-                          ) : null}
                         </View>
 
+                        {quickCreateProject &&
+                        status !== "done" &&
+                        status !== "canceled" ? (
+                          <QuickCreate
+                            theme={theme}
+                            placeholder={`New ${quickCreateProject.prefix} task`}
+                            onSubmit={(title) =>
+                              handleQuickCreate(column, quickCreateProject, title)
+                            }
+                          />
+                        ) : null}
+
                         <ScrollView
+                          scrollEnabled={!drag}
                           style={{ flex: 1 }}
                           contentContainerStyle={{ gap: 8, paddingBottom: 8 }}
                         >
@@ -1602,228 +1820,200 @@ function TasksBoardAndListShell({
                             const taskLabels = task.labelIds
                               .map((id) => labelById.get(id))
                               .filter((l): l is Label => Boolean(l));
+                            const dropLineHere =
+                              dropLineAt !== null &&
+                              otherTasks[dropLineAt]?.id === task.id;
 
                             return (
-                              <Pressable
-                                key={task.id}
-                                accessibilityRole="button"
-                                onPress={() => setSelectedTaskKey(task.key)}
-                                style={{
-                                  padding: 11,
-                                  borderRadius: 10,
-                                  backgroundColor: theme.colors.surface0,
-                                  borderWidth: 1,
-                                  borderColor: selected
-                                    ? theme.colors.accent
-                                    : theme.colors.border,
-                                  gap: 7,
-                                }}
-                              >
-                                <View
-                                  style={{
-                                    flexDirection: "row",
-                                    alignItems: "center",
-                                    justifyContent: "space-between",
+                              <React.Fragment key={task.id}>
+                                {dropLineHere ? (
+                                  <DropLine theme={theme} />
+                                ) : null}
+                                <DraggableCard
+                                  taskId={task.id}
+                                  drag={boardDrag}
+                                  cardRef={(view) => {
+                                    if (view) cardViews.current.set(task.id, view);
+                                    else cardViews.current.delete(task.id);
                                   }}
+                                  dragging={drag?.taskId === task.id}
                                 >
-                                  <View
+                                  <Pressable
+                                    accessibilityRole="button"
+                                    onPress={() => {
+                                      if (Date.now() < suppressPressUntil.current) {
+                                        return;
+                                      }
+                                      setSelectedTaskKey(task.key);
+                                    }}
                                     style={{
-                                      flexDirection: "row",
-                                      alignItems: "center",
-                                      gap: 6,
+                                      padding: 11,
+                                      borderRadius: 10,
+                                      backgroundColor: theme.colors.surface0,
+                                      borderWidth: 1,
+                                      borderColor: selected
+                                        ? theme.colors.accent
+                                        : theme.colors.border,
+                                      gap: 7,
                                     }}
                                   >
-                                    {proj ? (
-                                      <ProjectDot
-                                        color={proj.color}
-                                        size={7}
-                                      />
-                                    ) : null}
-                                    <Text
+                                    <View
                                       style={{
-                                        color: theme.colors.foregroundMuted,
-                                        fontSize: 11,
-                                        fontWeight: "700",
+                                        flexDirection: "row",
+                                        alignItems: "center",
+                                        justifyContent: "space-between",
                                       }}
                                     >
-                                      {task.key}
-                                    </Text>
-                                    <PriorityIcon
-                                      priority={task.priority}
-                                      theme={theme}
-                                      size={12}
-                                    />
-                                    {groupByStage ? (
-                                      <>
-                                        <StatusIcon
-                                          status={task.status}
-                                          theme={theme}
-                                          size={12}
-                                        />
-                                        <Text
-                                          numberOfLines={1}
-                                          style={{
-                                            color: theme.colors.foregroundMuted,
-                                            fontSize: 11,
-                                          }}
-                                        >
-                                          {STATUS_LABELS[task.status]}
-                                        </Text>
-                                      </>
-                                    ) : task.stage ? (
-                                      <Text
-                                        numberOfLines={1}
-                                        style={{
-                                          color: theme.colors.foregroundMuted,
-                                          fontSize: 11,
-                                        }}
-                                      >
-                                        {task.stage}
-                                      </Text>
-                                    ) : null}
-                                  </View>
-
-                                  <View
-                                    style={{
-                                      flexDirection: "row",
-                                      alignItems: "center",
-                                      gap: 4,
-                                    }}
-                                  >
-                                    {prevColumn ? (
-                                      <Pressable
-                                        accessibilityRole="button"
-                                        accessibilityLabel={`Move ${task.key} to ${prevColumn.label}`}
-                                        onPress={() =>
-                                          void (prevColumn.status
-                                            ? handleMoveStatus(
-                                                task,
-                                                prevColumn.status,
-                                              )
-                                            : handleMoveStage(
-                                                task,
-                                                prevColumn.stage,
-                                              ))
-                                        }
-                                        style={{
-                                          paddingHorizontal: 5,
-                                          paddingVertical: 2,
-                                          borderRadius: 4,
-                                          backgroundColor:
-                                            theme.colors.surface2,
-                                        }}
-                                      >
-                                        <Text
-                                          style={{
-                                            color:
-                                              theme.colors.foregroundMuted,
-                                            fontSize: 10,
-                                          }}
-                                        >
-                                          ←
-                                        </Text>
-                                      </Pressable>
-                                    ) : null}
-                                    {nextColumn ? (
-                                      <Pressable
-                                        accessibilityRole="button"
-                                        accessibilityLabel={`Move ${task.key} to ${nextColumn.label}`}
-                                        onPress={() =>
-                                          void (nextColumn.status
-                                            ? handleMoveStatus(
-                                                task,
-                                                nextColumn.status,
-                                              )
-                                            : handleMoveStage(
-                                                task,
-                                                nextColumn.stage,
-                                              ))
-                                        }
-                                        style={{
-                                          paddingHorizontal: 5,
-                                          paddingVertical: 2,
-                                          borderRadius: 4,
-                                          backgroundColor:
-                                            theme.colors.surface2,
-                                        }}
-                                      >
-                                        <Text
-                                          style={{
-                                            color:
-                                              theme.colors.foregroundMuted,
-                                            fontSize: 10,
-                                          }}
-                                        >
-                                          →
-                                        </Text>
-                                      </Pressable>
-                                    ) : null}
-                                  </View>
-                                </View>
-
-                                <Text
-                                  numberOfLines={2}
-                                  style={{
-                                    color: theme.colors.foreground,
-                                    fontSize: 13,
-                                    fontWeight: "600",
-                                    lineHeight: 18,
-                                  }}
-                                >
-                                  {task.title}
-                                </Text>
-
-                                {taskLabels.length > 0 || task.dueDate ? (
-                                  <View
-                                    style={{
-                                      flexDirection: "row",
-                                      flexWrap: "wrap",
-                                      alignItems: "center",
-                                      gap: 5,
-                                    }}
-                                  >
-                                    {taskLabels.map((l) => (
-                                      <LabelPill
-                                        key={l.id}
-                                        name={l.name}
-                                        color={l.color}
-                                        theme={theme}
-                                      />
-                                    ))}
-                                    {task.dueDate ? (
                                       <View
                                         style={{
                                           flexDirection: "row",
                                           alignItems: "center",
-                                          gap: 4,
-                                          paddingHorizontal: 6,
-                                          paddingVertical: 2,
-                                          borderRadius: 6,
-                                          backgroundColor:
-                                            theme.colors.surface2,
+                                          gap: 6,
                                         }}
                                       >
-                                        <Icon
-                                          name="Calendar"
-                                          size={10}
-                                          color={theme.colors.foregroundMuted}
-                                        />
+                                        {proj ? (
+                                          <ProjectDot
+                                            color={proj.color}
+                                            size={7}
+                                          />
+                                        ) : null}
                                         <Text
                                           style={{
-                                            color:
-                                              theme.colors.foregroundMuted,
-                                            fontSize: 10,
+                                            color: theme.colors.foregroundMuted,
+                                            fontSize: 11,
+                                            fontWeight: "700",
                                           }}
                                         >
-                                          {task.dueDate}
+                                          {task.key}
                                         </Text>
+                                        <PriorityIcon
+                                          priority={task.priority}
+                                          theme={theme}
+                                          size={12}
+                                        />
+                                        {!groupByStage && task.stage ? (
+                                          <Text
+                                            numberOfLines={1}
+                                            style={{
+                                              color: theme.colors.foregroundMuted,
+                                              fontSize: 11,
+                                            }}
+                                          >
+                                            {task.stage}
+                                          </Text>
+                                        ) : null}
+                                      </View>
+
+                                      <View
+                                        style={{
+                                          flexDirection: "row",
+                                          alignItems: "center",
+                                          gap: 2,
+                                        }}
+                                      >
+                                        {groupByStage ? (
+                                          <MenuButton
+                                            accessibilityLabel={`Change stage of ${task.key}`}
+                                            items={() => stageMenuItems(task)}
+                                            style={cardMenuStyle}
+                                          >
+                                            <Icon
+                                              name="Layers"
+                                              size={12}
+                                              color={theme.colors.foregroundMuted}
+                                            />
+                                          </MenuButton>
+                                        ) : null}
+                                        <MenuButton
+                                          accessibilityLabel={`Change status of ${task.key}, ${STATUS_LABELS[task.status]}`}
+                                          items={() => statusMenuItems(task)}
+                                          style={cardMenuStyle}
+                                        >
+                                          <StatusIcon
+                                            status={task.status}
+                                            theme={theme}
+                                            size={13}
+                                          />
+                                          <Icon
+                                            name="ChevronDown"
+                                            size={10}
+                                            color={theme.colors.foregroundMuted}
+                                          />
+                                        </MenuButton>
+                                      </View>
+                                    </View>
+
+                                    <Text
+                                      numberOfLines={2}
+                                      style={{
+                                        color: theme.colors.foreground,
+                                        fontSize: 13,
+                                        fontWeight: "600",
+                                        lineHeight: 18,
+                                      }}
+                                    >
+                                      {task.title}
+                                    </Text>
+
+                                    <AgentLine task={task} theme={theme} />
+
+                                    {taskLabels.length > 0 || task.dueDate ? (
+                                      <View
+                                        style={{
+                                          flexDirection: "row",
+                                          flexWrap: "wrap",
+                                          alignItems: "center",
+                                          gap: 5,
+                                        }}
+                                      >
+                                        {taskLabels.map((l) => (
+                                          <LabelPill
+                                            key={l.id}
+                                            name={l.name}
+                                            color={l.color}
+                                            theme={theme}
+                                          />
+                                        ))}
+                                        {task.dueDate ? (
+                                          <View
+                                            style={{
+                                              flexDirection: "row",
+                                              alignItems: "center",
+                                              gap: 4,
+                                              paddingHorizontal: 6,
+                                              paddingVertical: 2,
+                                              borderRadius: 6,
+                                              backgroundColor:
+                                                theme.colors.surface2,
+                                            }}
+                                          >
+                                            <Icon
+                                              name="Calendar"
+                                              size={10}
+                                              color={theme.colors.foregroundMuted}
+                                            />
+                                            <Text
+                                              style={{
+                                                color:
+                                                  theme.colors.foregroundMuted,
+                                                fontSize: 10,
+                                              }}
+                                            >
+                                              {task.dueDate}
+                                            </Text>
+                                          </View>
+                                        ) : null}
                                       </View>
                                     ) : null}
-                                  </View>
-                                ) : null}
-                              </Pressable>
+                                  </Pressable>
+                                </DraggableCard>
+                              </React.Fragment>
                             );
                           })}
+                          {dropLineAt !== null &&
+                          dropLineAt >= otherTasks.length ? (
+                            <DropLine theme={theme} />
+                          ) : null}
                         </ScrollView>
                       </View>
                     );
@@ -1983,17 +2173,19 @@ function TasksBoardAndListShell({
                                     >
                                       {task.key}
                                     </Text>
-                                    <Text
-                                      numberOfLines={1}
-                                      style={{
-                                        color: theme.colors.foreground,
-                                        fontSize: 13,
-                                        fontWeight: "600",
-                                        flex: 1,
-                                      }}
-                                    >
-                                      {task.title}
-                                    </Text>
+                                    <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                                      <Text
+                                        numberOfLines={1}
+                                        style={{
+                                          color: theme.colors.foreground,
+                                          fontSize: 13,
+                                          fontWeight: "600",
+                                        }}
+                                      >
+                                        {task.title}
+                                      </Text>
+                                      <AgentLine task={task} theme={theme} />
+                                    </View>
                                     <View
                                       style={{
                                         flexDirection: "row",
@@ -2078,6 +2270,14 @@ function TasksBoardAndListShell({
         initialTab={manageTab}
         theme={theme}
       />
+      {drag ? (
+        <DragGhost
+          task={tasks.find((t) => t.id === drag.taskId)}
+          left={drag.point.x - geometry.current.origin.x + 8}
+          top={drag.point.y - geometry.current.origin.y + 8}
+          theme={theme}
+        />
+      ) : null}
       {lastMove ? (
         <View
           key={lastMove.id}
@@ -2135,6 +2335,100 @@ function TasksBoardAndListShell({
   );
 }
 
+function QuickCreate({
+  theme,
+  placeholder,
+  onSubmit,
+}: {
+  theme: PluginTheme;
+  placeholder: string;
+  onSubmit: (title: string) => Promise<boolean>;
+}) {
+  const [title, setTitle] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  async function submit() {
+    const trimmed = title.trim();
+    if (!trimmed || submitting) return;
+    setSubmitting(true);
+    if (await onSubmit(trimmed)) setTitle("");
+    setSubmitting(false);
+  }
+  return (
+    <TextInput
+      value={title}
+      onChangeText={setTitle}
+      onSubmitEditing={() => void submit()}
+      submitBehavior="submit"
+      editable={!submitting}
+      placeholder={placeholder}
+      placeholderTextColor={theme.colors.foregroundMuted}
+      accessibilityLabel={placeholder}
+      style={{
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface0,
+        color: theme.colors.foreground,
+        fontSize: 12,
+      }}
+    />
+  );
+}
+
+function DragGhost({
+  task,
+  left,
+  top,
+  theme,
+}: {
+  task: Task | undefined;
+  left: number;
+  top: number;
+  theme: PluginTheme;
+}) {
+  if (!task) return null;
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: "absolute",
+        left,
+        top,
+        width: 240,
+        padding: 10,
+        gap: 4,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: theme.colors.border,
+        backgroundColor: theme.colors.surface0,
+        shadowColor: "#000",
+        shadowOpacity: 0.18,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 8 },
+        zIndex: 50,
+      }}
+    >
+      <Text
+        style={{
+          color: theme.colors.foregroundMuted,
+          fontSize: 11,
+          fontWeight: "700",
+        }}
+      >
+        {task.key}
+      </Text>
+      <Text
+        numberOfLines={2}
+        style={{ color: theme.colors.foreground, fontSize: 13, fontWeight: "600" }}
+      >
+        {task.title}
+      </Text>
+    </View>
+  );
+}
+
 export function TasksScreen({
   theme,
   layout,
@@ -2142,14 +2436,16 @@ export function TasksScreen({
   navigation,
 }: PluginScreenProps) {
   return (
-    <TasksBoardAndListShell
-      theme={theme}
-      compact={layout.compact}
-      initialTaskKey={params.taskKey ?? null}
-      initialProjectId={params.projectId ?? null}
-      openAgent={navigation?.openAgent}
-      openWorkspace={navigation?.openWorkspace}
-    />
+    <MenuProvider theme={theme}>
+      <TasksBoardAndListShell
+        theme={theme}
+        compact={layout.compact}
+        initialTaskKey={params.taskKey ?? null}
+        initialProjectId={params.projectId ?? null}
+        openAgent={navigation?.openAgent}
+        openWorkspace={navigation?.openWorkspace}
+      />
+    </MenuProvider>
   );
 }
 
@@ -2164,13 +2460,15 @@ export function TasksWorkspacePanel({
   }));
 
   return (
-    <TasksBoardAndListShell
-      theme={theme}
-      compact={layout.compact}
-      linkedPaseoProjectId={ws?.projectId ?? null}
-      openAgent={navigation?.openAgent}
-      openWorkspace={navigation?.openWorkspace}
-    />
+    <MenuProvider theme={theme}>
+      <TasksBoardAndListShell
+        theme={theme}
+        compact={layout.compact}
+        linkedPaseoProjectId={ws?.projectId ?? null}
+        openAgent={navigation?.openAgent}
+        openWorkspace={navigation?.openWorkspace}
+      />
+    </MenuProvider>
   );
 }
 
@@ -2257,27 +2555,31 @@ export function TaskAgentPanel({
             ))}
           </View>
         ) : null}
-        <TaskDetailView
-          taskKey={selectedTaskKey}
-          theme={theme}
-          compact={layout.compact}
-          onSelectTaskKey={setSelectedTaskKey}
-          onClose={() => setSelectedTaskKey(null)}
-          openAgent={navigation?.openAgent}
-          openWorkspace={navigation?.openWorkspace}
-        />
+        <MenuProvider theme={theme}>
+          <TaskDetailView
+            taskKey={selectedTaskKey}
+            theme={theme}
+            compact={layout.compact}
+            onSelectTaskKey={setSelectedTaskKey}
+            onClose={() => setSelectedTaskKey(null)}
+            openAgent={navigation?.openAgent}
+            openWorkspace={navigation?.openWorkspace}
+          />
+        </MenuProvider>
       </View>
     );
   }
 
   return (
-    <TasksBoardAndListShell
-      theme={theme}
-      compact={layout.compact}
-      linkedPaseoProjectId={ws?.projectId ?? null}
-      openAgent={navigation?.openAgent}
-      openWorkspace={navigation?.openWorkspace}
-    />
+    <MenuProvider theme={theme}>
+      <TasksBoardAndListShell
+        theme={theme}
+        compact={layout.compact}
+        linkedPaseoProjectId={ws?.projectId ?? null}
+        openAgent={navigation?.openAgent}
+        openWorkspace={navigation?.openWorkspace}
+      />
+    </MenuProvider>
   );
 }
 

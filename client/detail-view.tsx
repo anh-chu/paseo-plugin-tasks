@@ -45,11 +45,13 @@ import {
   formatRelativeTime,
   LabelPill,
   PriorityBadge,
+  PriorityIcon,
   ProjectDot,
   StatusBadge,
   StatusIcon,
   ThreadLiveStatusBadge,
 } from "./badges";
+import { MenuButton } from "./menu";
 
 export interface TaskDetailViewProps {
   taskKey: string;
@@ -281,6 +283,21 @@ export function TaskDetailView({
     latestAgentComment?.authorName ??
     taskThreads[0]?.title ??
     notifyTargetThreadId;
+
+  const propertyStyle = {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 7,
+    backgroundColor: theme.colors.surface2,
+  };
+  const propertyTextStyle = {
+    color: theme.colors.foreground,
+    fontSize: 12,
+    fontWeight: "600" as const,
+  };
 
   async function handleQuickUpdate(
     patch: Partial<{
@@ -728,7 +745,7 @@ export function TaskDetailView({
         </View>
       )}
 
-      {/* Properties Rail: Status, Priority, Labels, Project */}
+      {/* Properties Rail: Status, Priority, Stage, Labels, Project */}
       <View
         style={{
           padding: 12,
@@ -739,136 +756,75 @@ export function TaskDetailView({
           gap: 12,
         }}
       >
-        <View style={{ gap: 6 }}>
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, fontWeight: "600" }}>
-            STATUS
-          </Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            {TASK_STATUSES.map((status) => {
-              const active = task.status === status;
-              return (
-                <Pressable
-                  key={status}
-                  accessibilityRole="button"
-                  onPress={() => void handleQuickUpdate({ status })}
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 5,
-                    paddingHorizontal: 9,
-                    paddingVertical: 5,
-                    borderRadius: 999,
-                    backgroundColor: active
-                      ? theme.colors.accent
-                      : theme.colors.surface2,
-                  }}
-                >
-                  <StatusIcon
-                    status={status}
-                    theme={theme}
-                    size={12}
-                  />
-                  <Text
-                    style={{
-                      color: active
-                        ? theme.colors.accentForeground
-                        : theme.colors.foreground,
-                      fontSize: 11,
-                      fontWeight: active ? "700" : "500",
-                    }}
-                  >
-                    {STATUS_LABELS[status]}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+          <MenuButton
+            accessibilityLabel={`Status, ${STATUS_LABELS[task.status]}`}
+            items={() =>
+              TASK_STATUSES.map((status) => ({
+                key: status,
+                label: STATUS_LABELS[status],
+                icon: <StatusIcon status={status} theme={theme} size={12} />,
+                selected: task.status === status,
+                onSelect: () => {
+                  if (status !== task.status) void handleQuickUpdate({ status });
+                },
+              }))
+            }
+            style={propertyStyle}
+          >
+            <StatusIcon status={task.status} theme={theme} size={12} />
+            <Text style={propertyTextStyle}>{STATUS_LABELS[task.status]}</Text>
+            <Icon name="ChevronDown" size={11} color={theme.colors.foregroundMuted} />
+          </MenuButton>
 
-        {currentProject && currentProject.stages.length > 0 ? (
-          <View style={{ gap: 6 }}>
-            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, fontWeight: "600" }}>
-              STAGE
-            </Text>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-              {[
-                null,
-                ...currentProject.stages,
-                ...(task.stage !== null && !currentProject.stages.includes(task.stage)
-                  ? [task.stage]
-                  : []),
-              ].map((stage) => {
-                const active = task.stage === stage;
-                return (
-                  <Pressable
-                    key={stage ?? ""}
-                    accessibilityRole="button"
-                    onPress={() => {
-                      if (!active) void handleQuickUpdate({ stage });
-                    }}
-                    style={{
-                      paddingHorizontal: 9,
-                      paddingVertical: 5,
-                      borderRadius: 999,
-                      backgroundColor: active
-                        ? theme.colors.accent
-                        : theme.colors.surface2,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: active
-                          ? theme.colors.accentForeground
-                          : theme.colors.foreground,
-                        fontSize: 11,
-                        fontWeight: active ? "700" : "500",
-                      }}
-                    >
-                      {stage ?? "None"}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-        ) : null}
+          <MenuButton
+            accessibilityLabel={`Priority, ${PRIORITY_LABELS[task.priority]}`}
+            items={() =>
+              TASK_PRIORITIES.map((priority) => ({
+                key: priority,
+                label: PRIORITY_LABELS[priority],
+                icon: <PriorityIcon priority={priority} theme={theme} size={12} />,
+                selected: task.priority === priority,
+                onSelect: () => {
+                  if (priority !== task.priority) {
+                    void handleQuickUpdate({ priority });
+                  }
+                },
+              }))
+            }
+            style={propertyStyle}
+          >
+            <PriorityIcon priority={task.priority} theme={theme} size={12} />
+            <Text style={propertyTextStyle}>{PRIORITY_LABELS[task.priority]}</Text>
+            <Icon name="ChevronDown" size={11} color={theme.colors.foregroundMuted} />
+          </MenuButton>
 
-        <View style={{ gap: 6 }}>
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, fontWeight: "600" }}>
-            PRIORITY
-          </Text>
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-            {TASK_PRIORITIES.map((priority) => {
-              const active = task.priority === priority;
-              return (
-                <Pressable
-                  key={priority}
-                  accessibilityRole="button"
-                  onPress={() => void handleQuickUpdate({ priority })}
-                  style={{
-                    paddingHorizontal: 9,
-                    paddingVertical: 5,
-                    borderRadius: 7,
-                    backgroundColor: active
-                      ? theme.colors.accent
-                      : theme.colors.surface2,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: active
-                        ? theme.colors.accentForeground
-                        : theme.colors.foreground,
-                      fontSize: 11,
-                      fontWeight: active ? "700" : "500",
-                    }}
-                  >
-                    {PRIORITY_LABELS[priority]}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          {currentProject && currentProject.stages.length > 0 ? (
+            <MenuButton
+              accessibilityLabel={`Stage, ${task.stage ?? "None"}`}
+              items={() =>
+                [
+                  null,
+                  ...currentProject.stages,
+                  ...(task.stage !== null && !currentProject.stages.includes(task.stage)
+                    ? [task.stage]
+                    : []),
+                ].map((stage) => ({
+                  key: stage ?? "",
+                  label: stage ?? "No stage",
+                  selected: task.stage === stage,
+                  onSelect: () => {
+                    if (task.stage !== stage) void handleQuickUpdate({ stage });
+                  },
+                }))
+              }
+              style={propertyStyle}
+            >
+              <Icon name="Layers" size={12} color={theme.colors.foregroundMuted} />
+              <Text style={propertyTextStyle}>{task.stage ?? "No stage"}</Text>
+              <Icon name="ChevronDown" size={11} color={theme.colors.foregroundMuted} />
+            </MenuButton>
+          ) : null}
         </View>
 
         {projectLabels.length > 0 ? (
