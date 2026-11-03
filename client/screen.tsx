@@ -51,6 +51,7 @@ import {
   StatusBadge,
   StatusIcon,
 } from "./badges";
+import { SessionInbox } from "./adopt";
 import { TaskDetailView } from "./detail-view";
 import {
   columnAt,
@@ -1655,6 +1656,16 @@ function TasksBoardAndListShell({
                     gap: 12,
                   }}
                 >
+                  {currentProject?.linkedBbProjectId ? (
+                    <SessionInbox
+                      theme={theme}
+                      compact={compact}
+                      project={currentProject}
+                      tasks={tasks}
+                      onChanged={invalidateAll}
+                      openAgent={openAgent}
+                    />
+                  ) : null}
                   {boardColumns.map((column) => {
                     const { status } = column;
                     const columnTasks = column.tasks;

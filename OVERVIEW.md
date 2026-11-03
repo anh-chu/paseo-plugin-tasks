@@ -2,6 +2,8 @@ Tasks is a local task tracker inside Paseo: projects, folders, subtasks, labels,
 
 The board is the working surface. Drag a card between columns or within one, or use its status menu, to change status and order. Type a title at the top of a column to add a task there. Each card shows what its agents last said and when. Filter by project, label, priority, or text, and sort by manual position, priority, or due date. Opening a task shows its description, status, priority, labels, due date, sub-tasks, attachments, comments, and the agent sessions attached to it. A column collapses to a narrow strip when you click its title. **Needs you** lists every task in review across all projects.
 
+Sessions you started without a task can join the tracker later. The **Task** pill beside the composer of a session with no task opens a picker: create a task from the session, with its title filled in, or attach the session to an open task. On a project linked to a Paseo project, the board starts with a collapsed **Sessions without a task** column listing that project's live sessions that no task has adopted. Expand it to create a task for one session, attach a session to a task, or create a task for each.
+
 A project can also define its own stages, such as Investigate, Spec, Build and Review. Stages are optional and off until a project lists them. Status still says who has the work; the stage says where the work is. The board can then group by stage instead of status, the task view gets a stage picker, and every stage change is recorded as a comment.
 
 ## How delegation works

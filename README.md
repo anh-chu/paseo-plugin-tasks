@@ -114,8 +114,9 @@ A comment sent with **Notify agent** is delivered to the agent that last replied
 | Tasks screen | Sidebar item, `/tasks [TASK-KEY]`, command center |
 | Needs you | Tasks screen navigation; across projects, grouped by reason: an agent waiting for approval, an agent that failed, In review, and ideas agents proposed |
 | Workspace board panel | Workspace and explorer panels, command center |
-| Agent task inspector | Agent panel, `/task-panel`, composer pill |
-| Composer pill | Beside the composer for each agent; shows the linked task key |
+| Agent task inspector | Agent panel, `/task-panel`, composer pill on a linked session |
+| Composer pill | Beside the composer for each agent; shows the linked task key, or on a session with no task opens a picker to create a task from it or attach it to one |
+| Sessions without a task | First board column on a project linked to a Paseo project, collapsed by default; adopt live sessions one at a time or all at once |
 | Attachment picker | `@` and `+` pickers in the composer |
 | Settings | **Settings → Plugins → Tasks** |
 

@@ -187,6 +187,43 @@ describe("paseo-plugin-tasks", () => {
     expect((await attempt("done")).exitCode).toBe(0);
   });
 
+  it("lists only live, unadopted sessions in the linked Paseo project", async () => {
+    const project = domain.createProject({ name: "Inbox", prefix: "INB", color: "blue", linkedBbProjectId: "prj_demo123" }).project;
+    const unlinked = domain.createProject({ name: "Loose", prefix: "LSE", color: "blue" }).project;
+    const agent = (id: string, workspaceId: string, extra: Record<string, unknown> = {}) => ({
+      agent: { id, workspaceId, provider: "claude", status: "idle", title: id, updatedAt: "2026-11-01T00:00:00Z", archivedAt: null, ...extra },
+    });
+    const paseo = {
+      workspaces: {
+        list: vi.fn(async () => ({
+          entries: [
+            { id: "wks_in", projectId: "prj_demo123" },
+            { id: "wks_out", projectId: "prj_other" },
+          ],
+        })),
+      },
+      agents: {
+        list: vi.fn(async () => ({
+          entries: [
+            agent("free", "wks_in", { updatedAt: "2026-11-02T00:00:00Z" }),
+            agent("older", "wks_in"),
+            agent("adopted", "wks_in"),
+            agent("archived", "wks_in", { archivedAt: "2026-11-01T00:00:00Z" }),
+            agent("elsewhere", "wks_out"),
+          ],
+        })),
+        ref: mockPaseo.agents.ref,
+      },
+    };
+    const task = domain.createTask({ projectId: project.id, title: "Taken", status: "todo", priority: "none" });
+    if (!task.ok) throw new Error("task creation failed");
+    await domain.taskThreadsAttach({ taskId: task.task.id, threadId: "adopted" }, paseo as never);
+
+    const { threads } = await domain.listUnattachedThreads({ projectId: project.id }, paseo as never);
+    expect(threads.map((t) => t.id)).toEqual(["free", "older"]);
+    expect(await domain.listUnattachedThreads({ projectId: unlinked.id }, paseo as never)).toEqual({ threads: [] });
+  });
+
   it("sends command-code a supported mode and rejects unknown full-access modes before creating a workspace", async () => {
     const project = domain.createProject({ name: "Demo", prefix: "DEMO", color: "blue", linkedBbProjectId: "prj_demo123" }).project;
     const task = domain.createTask({ projectId: project.id, title: "Example", status: "todo", priority: "medium" });

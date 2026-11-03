@@ -1767,6 +1767,52 @@ export function createDomainHandlers(
         return { threads: [] };
       }
     },
+    async listUnattachedThreads(
+      input: { projectId: string },
+      paseoOverride?: PaseoApi | null,
+    ) {
+      const paseo = paseoOverride ?? getPaseo();
+      const project = store.tasks.getProject(input.projectId);
+      if (!paseo || !project?.linkedBbProjectId) return { threads: [] };
+      const linked = project.linkedBbProjectId;
+      try {
+        const [{ entries: workspaces }, { entries }] = await Promise.all([
+          paseo.workspaces.list(),
+          paseo.agents.list(),
+        ]);
+        const inProject = new Set(
+          workspaces
+            .filter(
+              (w) =>
+                w.projectId === linked ||
+                w.projectRootPath === linked ||
+                w.projectDisplayName === linked,
+            )
+            .map((w) => w.id),
+        );
+        const threads = entries
+          .map((e) => e.agent)
+          .filter(
+            (agent) =>
+              !agent.archivedAt &&
+              agent.workspaceId !== undefined &&
+              inProject.has(agent.workspaceId) &&
+              store.tasks.listTaskThreadsByThreadId(agent.id).length === 0,
+          )
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+          .slice(0, 30)
+          .map((agent) => ({
+            id: agent.id,
+            title: agent.title?.trim() || `Agent ${agent.id.slice(0, 8)}`,
+            status: agent.status,
+            provider: agent.provider,
+            updatedAt: agent.updatedAt,
+          }));
+        return { threads };
+      } catch {
+        return { threads: [] };
+      }
+    },
     createPreset(input: {
       name: string;
       providerId: string;

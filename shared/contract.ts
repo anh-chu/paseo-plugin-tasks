@@ -784,6 +784,28 @@ export const searchThreadsRpc = defineRpc({
     .strict(),
 });
 
+// Running sessions in a task project's linked Paseo project that no task has
+// adopted yet. Empty when the project is not linked.
+export const listUnattachedThreadsRpc = defineRpc({
+  name: "tasks.list_unattached_threads",
+  input: z.object({ projectId: idSchema }).strict(),
+  output: z
+    .object({
+      threads: z.array(
+        z
+          .object({
+            id: z.string(),
+            title: z.string(),
+            status: z.string(),
+            provider: z.string(),
+            updatedAt: z.string(),
+          })
+          .strict(),
+      ),
+    })
+    .strict(),
+});
+
 // Preset & Provider Catalog RPCs
 export const createPresetRpc = defineRpc({
   name: "tasks.create_preset",
