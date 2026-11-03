@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import {
   displayName,
   TASK_CARD_KIND,
+  UNSORTED_PREFIX,
   type TaskStatus,
   type TaskThreadLiveStatus,
 } from "../shared/constants";
@@ -996,6 +997,7 @@ export function createDomainHandlers(
       parentTaskId?: string | null;
       labelIds?: string[];
       idea?: boolean;
+      sourceBbProjectId?: string | null;
     }) {
       try {
         validateTaskParent(store, input.projectId, input.parentTaskId ?? null);
@@ -1010,6 +1012,7 @@ export function createDomainHandlers(
             dueDate: input.dueDate ?? null,
             parentTaskId: input.parentTaskId ?? null,
             idea: input.idea,
+            sourceBbProjectId: input.sourceBbProjectId ?? null,
           });
           replaceTaskLabels(store, created.id, input.labelIds ?? []);
           return apiTask(store, created);
@@ -1767,6 +1770,42 @@ export function createDomainHandlers(
         return { threads: [] };
       }
     },
+    // The tracker project for a session's folder. ctxProjectId wins when the
+    // caller knows it; otherwise the session's workspace is looked up.
+    async sessionProject(
+      input: { threadId?: string; paseoProjectId?: string },
+      paseoOverride?: PaseoApi | null,
+    ): Promise<{ paseoProjectId: string | null; project: Project | null }> {
+      let paseoProjectId = input.paseoProjectId ?? null;
+      const paseo = paseoOverride ?? getPaseo();
+      if (!paseoProjectId && input.threadId && paseo) {
+        try {
+          // The agent record names its project; the workspace list would not,
+          // because it leaves out background workspaces.
+          const refreshed = await paseo.agents.ref(input.threadId).refresh();
+          paseoProjectId = refreshed?.project?.projectKey ?? null;
+        } catch {}
+      }
+      const project = paseoProjectId
+        ? (store.tasks
+            .listProjects()
+            .find((p) => p.linkedBbProjectId === paseoProjectId) ?? null)
+        : null;
+      return { paseoProjectId, project };
+    },
+    // Holds suggestions from folders not linked to any project.
+    // ponytail: found by its UNS prefix, so renaming that prefix makes a new
+    // Unsorted project; store a project flag if users rename it.
+    unsortedProject(): Project {
+      return (
+        store.tasks.listProjects().find((p) => p.prefix === UNSORTED_PREFIX) ??
+        store.tasks.createProject({
+          name: "Unsorted",
+          prefix: UNSORTED_PREFIX,
+          color: "gray",
+        })
+      );
+    },
     async listUnattachedThreads(
       input: { projectId: string },
       paseoOverride?: PaseoApi | null,
@@ -1776,27 +1815,13 @@ export function createDomainHandlers(
       if (!paseo || !project?.linkedBbProjectId) return { threads: [] };
       const linked = project.linkedBbProjectId;
       try {
-        const [{ entries: workspaces }, { entries }] = await Promise.all([
-          paseo.workspaces.list(),
-          paseo.agents.list(),
-        ]);
-        const inProject = new Set(
-          workspaces
-            .filter(
-              (w) =>
-                w.projectId === linked ||
-                w.projectRootPath === linked ||
-                w.projectDisplayName === linked,
-            )
-            .map((w) => w.id),
-        );
+        const { entries } = await paseo.agents.list();
         const threads = entries
+          .filter((e) => e.project?.projectKey === linked)
           .map((e) => e.agent)
           .filter(
             (agent) =>
               !agent.archivedAt &&
-              agent.workspaceId !== undefined &&
-              inProject.has(agent.workspaceId) &&
               store.tasks.listTaskThreadsByThreadId(agent.id).length === 0,
           )
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))

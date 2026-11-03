@@ -256,7 +256,8 @@ Commands:
   project create|list|show|update     Manage tracker projects, prefixes, Paseo project links, and stages (--stages "A,B,C", "" turns off)
   folder create|list|update|delete    Organize tracker projects into folders
   create                              Create a task (--project, --title, --description, --priority, --due, --label, --parent, --attach)
-  propose <key-or-id>                 Propose a follow-up idea found while working on a task (--title, --description); the user accepts or dismisses it
+  context                             Show this folder's project, this session's tasks, and open tasks to pick from
+  propose [key-or-id]                 Suggest a task (--title, --description) for the user to approve; with a key, a follow-up found while working on that task
   list                                List and filter tasks (--project, --status, --priority, --label, --active, --needs-you, --search, --sort, --limit, --cursor)
   show <key-or-id>                    Show full task record, subtasks, comments, attachments, and attached agents
   update <key-or-id>                  Update status, priority, title, description, due date, parent, labels, or stage (--stage <name>, none clears)
@@ -758,13 +759,47 @@ export async function runTasksCli(
       };
     }
 
+    if (cmd0 === "context") {
+      const { project } = await domain.sessionProject({
+        threadId: invokingThreadId,
+        paseoProjectId: ctx.projectId,
+      });
+      const sessionTasks = invokingThreadId
+        ? domain.getAgentTasks({ agentId: invokingThreadId }).tasks
+        : [];
+      const openTasks = project
+        ? domain.listTasks({
+            projectId: project.id,
+            statuses: ["backlog", "todo", "in_progress", "in_review"],
+            limit: 20,
+          }).tasks
+        : [];
+      const line = (t: { key: string; title: string; status: string; idea: boolean }) =>
+        `  ${t.key}  ${t.title}  [${t.idea ? "suggested, awaiting approval" : t.status}]`;
+      return {
+        exitCode: 0,
+        stdout: wantJson
+          ? JSON.stringify({ project: project ?? null, sessionTasks, openTasks })
+          : [
+              project
+                ? `Folder project: ${project.prefix}  ${project.name}`
+                : "Folder project: none yet. Still track real work here: suggest a task with `paseo-tasks propose --title \"...\"`. It goes to Unsorted, and the user files it into a project when approving.",
+              sessionTasks.length > 0
+                ? ["This session's tasks:", ...sessionTasks.map(line)].join("\n")
+                : "This session's tasks: none",
+              ...(project
+                ? [
+                    openTasks.length > 0
+                      ? [`Open tasks in ${project.prefix}:`, ...openTasks.map(line)].join("\n")
+                      : `Open tasks in ${project.prefix}: none`,
+                  ]
+                : []),
+            ].join("\n"),
+      };
+    }
+
     if (cmd0 === "propose") {
-      if (!cmd1) {
-        throw new TasksCliError("missing required <key-or-id>", {
-          code: "missing_required",
-        });
-      }
-      const source = resolveTask(domain, cmd1);
+      const source = cmd1 ? resolveTask(domain, cmd1) : null;
       const title = getFlag(parsed, "title", "name", "subject");
       if (!title) {
         throw new TasksCliError("missing required option --title", {
@@ -777,6 +812,35 @@ export async function runTasksCli(
           getFlag(parsed, "description", "body", "details", "text", "content"),
           getFlag(parsed, "description-file"),
         )) ?? "";
+      if (!source) {
+        // A new piece of work with no task yet: suggest it in the folder's
+        // project, or in Unsorted when the folder is not linked.
+        const { paseoProjectId, project } = await domain.sessionProject({
+          threadId: invokingThreadId,
+          paseoProjectId: ctx.projectId,
+        });
+        const target = project ?? domain.unsortedProject();
+        const created = domain.createTask({
+          projectId: target.id,
+          title,
+          description,
+          idea: true,
+          sourceBbProjectId: project ? null : paseoProjectId,
+        });
+        if (!created.ok) throw new TasksCliError(created.error.message);
+        if (invokingThreadId) {
+          await domain.taskThreadsAttach({
+            taskId: created.task.id,
+            threadId: invokingThreadId,
+          });
+        }
+        return {
+          exitCode: 0,
+          stdout: wantJson
+            ? JSON.stringify({ task: created.task })
+            : `Suggested ${created.task.key}  ${created.task.title}. It waits for the user's approval; keep working.`,
+        };
+      }
       const created = domain.createTask({
         projectId: source.projectId,
         title,

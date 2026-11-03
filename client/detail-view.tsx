@@ -16,6 +16,7 @@ import {
   STATUS_LABELS,
   TASK_PRIORITIES,
   TASK_STATUSES,
+  UNSORTED_PREFIX,
   type TaskPriority,
   type TaskStatus,
 } from "../shared/constants";
@@ -38,8 +39,11 @@ import {
   listTaskThreadsRpc,
   moveTaskToProjectRpc,
   searchThreadsRpc,
+  updateProjectRpc,
   updateTaskRpc,
   uploadAttachmentRpc,
+  type Project,
+  type Task,
 } from "../shared/contract";
 import {
   formatRelativeTime,
@@ -265,6 +269,8 @@ export function TaskDetailView({
   }
 
   const projects = projectsQuery.data?.projects ?? [];
+  const inUnsorted =
+    projects.find((p) => p.id === task?.projectId)?.prefix === UNSORTED_PREFIX;
   const currentProject = projects.find((p) => p.id === task.projectId);
   const projectLabels = labelsQuery.data?.labels ?? [];
   const subtasks = subtasksQuery.data?.tasks ?? [];
@@ -511,7 +517,7 @@ export function TaskDetailView({
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           {task.idea ? (
             <>
-              <Pressable
+              {inUnsorted ? null : <Pressable
                 accessibilityRole="button"
                 onPress={() => void handleQuickUpdate({ idea: false })}
                 style={{
@@ -524,7 +530,7 @@ export function TaskDetailView({
                 <Text style={{ color: theme.colors.accentForeground, fontSize: 12, fontWeight: "600" }}>
                   Accept idea
                 </Text>
-              </Pressable>
+              </Pressable>}
               <Pressable
                 accessibilityRole="button"
                 onPress={() =>
@@ -602,6 +608,18 @@ export function TaskDetailView({
           ) : null}
         </View>
       </View>
+
+      {task.idea && inUnsorted ? (
+        <AcceptIntoProject
+          theme={theme}
+          task={task}
+          projects={projects.filter((p) => p.prefix !== UNSORTED_PREFIX)}
+          onAccepted={(key) => {
+            invalidateAll();
+            onSelectTaskKey?.(key);
+          }}
+        />
+      ) : null}
 
       {/* Title & Description */}
       {editingHeader ? (
@@ -1869,5 +1887,135 @@ export function TaskDetailView({
         </View>
       </View>
     </ScrollView>
+  );
+}
+
+// A suggestion from a folder with no Tasks project: pick where it belongs, and
+// optionally send that folder's future work to the same project.
+function AcceptIntoProject({
+  theme,
+  task,
+  projects,
+  onAccepted,
+}: {
+  theme: PluginTheme;
+  task: Task;
+  projects: Project[];
+  onAccepted: (key: string) => void;
+}) {
+  const toast = useToast();
+  const moveTaskToProject = useRpc(moveTaskToProjectRpc);
+  const updateTask = useRpc(updateTaskRpc);
+  const updateProject = useRpc(updateProjectRpc);
+  const [targetId, setTargetId] = useState<string | null>(null);
+  const [linkFolder, setLinkFolder] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const target = projects.find((p) => p.id === targetId) ?? null;
+  const canLink = Boolean(task.sourceBbProjectId && target && !target.linkedBbProjectId);
+
+  async function accept() {
+    if (!target || busy) return;
+    setBusy(true);
+    try {
+      const moved = await moveTaskToProject({ taskId: task.id, projectId: target.id });
+      if (!moved.ok) throw new Error(moved.error.message);
+      const accepted = await updateTask({ taskId: task.id, idea: false, authorName: "You" });
+      if (!accepted.ok) throw new Error(accepted.error.message);
+      if (canLink && linkFolder) {
+        await updateProject({
+          projectId: target.id,
+          linkedBbProjectId: task.sourceBbProjectId,
+        });
+      }
+      toast.show(`Accepted as ${moved.task.key}`, { variant: "success" });
+      onAccepted(moved.task.key);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const chip = (selected: boolean) => ({
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: selected ? theme.colors.surface2 : "transparent",
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  });
+
+  return (
+    <View
+      style={{
+        padding: 12,
+        borderRadius: 10,
+        backgroundColor: theme.colors.surface1,
+        gap: 10,
+      }}
+    >
+      <Text style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "600" }}>
+        Accept into
+      </Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+        {projects.map((p) => (
+          <Pressable
+            key={p.id}
+            accessibilityRole="button"
+            accessibilityState={{ selected: p.id === targetId }}
+            onPress={() => setTargetId(p.id)}
+            style={chip(p.id === targetId)}
+          >
+            <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>
+              {p.prefix} {p.name}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      {canLink ? (
+        <Pressable
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: linkFolder }}
+          onPress={() => setLinkFolder((v) => !v)}
+          style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+        >
+          <View
+            style={{
+              width: 14,
+              height: 14,
+              borderRadius: 3,
+              borderWidth: 1,
+              borderColor: theme.colors.foregroundMuted,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {linkFolder ? (
+              <Icon name="Check" size={11} color={theme.colors.foreground} />
+            ) : null}
+          </View>
+          <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>
+            Send future work from this folder to {target!.prefix}
+          </Text>
+        </Pressable>
+      ) : null}
+      <Pressable
+        accessibilityRole="button"
+        disabled={!target || busy}
+        onPress={() => void accept()}
+        style={{
+          alignSelf: "flex-start",
+          paddingHorizontal: 10,
+          paddingVertical: 6,
+          borderRadius: 7,
+          backgroundColor: theme.colors.accent,
+          opacity: !target || busy ? 0.5 : 1,
+        }}
+      >
+        <Text style={{ color: theme.colors.accentForeground, fontSize: 12, fontWeight: "600" }}>
+          {target ? `Accept into ${target.prefix}` : "Accept"}
+        </Text>
+      </Pressable>
+    </View>
   );
 }

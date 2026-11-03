@@ -88,6 +88,7 @@ interface TaskRow {
   parent_task_id: string | null;
   stage: string | null;
   idea: number;
+  source_bb_project_id: string | null;
   attention: Task["attention"];
   agent_status: Task["agentStatus"];
   agent_note: string | null;
@@ -455,6 +456,7 @@ function taskFromRow(row: TaskRow): Task {
     parentTaskId: row.parent_task_id,
     stage: row.stage,
     idea: row.idea === 1,
+    sourceBbProjectId: row.source_bb_project_id,
     attention: row.attention,
     agentStatus: row.agent_status,
     agentNote: row.agent_note,
@@ -951,13 +953,14 @@ export function createTasksStore(db: PluginDatabase) {
           string,
           string,
           number,
+          string | null,
         ]
       >(
         `
       INSERT INTO tasks (
         id, project_id, number, title, description, status, priority, due_date,
-        parent_task_id, position, created_at, updated_at, idea
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        parent_task_id, position, created_at, updated_at, idea, source_bb_project_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
       ).run(
         id,
@@ -973,6 +976,7 @@ export function createTasksStore(db: PluginDatabase) {
         createdAt,
         createdAt,
         input.idea === true ? 1 : 0,
+        input.sourceBbProjectId ?? null,
       );
       return requireTask(id);
     },

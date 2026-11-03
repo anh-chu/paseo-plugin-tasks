@@ -51,6 +51,8 @@ export interface Task {
   stage: string | null;
   // Proposed by an agent; kept off the board until the user accepts it.
   idea: boolean;
+  // Paseo project of the session that proposed it from an unlinked folder.
+  sourceBbProjectId: string | null;
   // Set while an agent on the open task waits for approval or has failed.
   attention: "waiting" | "failed" | null;
   // Most urgent state across attached agent threads; null without threads.
@@ -171,6 +173,7 @@ export interface CreateTaskInput {
   dueDate?: string | null;
   parentTaskId?: string | null;
   idea?: boolean;
+  sourceBbProjectId?: string | null;
 }
 
 export interface UpdateTaskInput {

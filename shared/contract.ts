@@ -81,6 +81,7 @@ export const taskSchema = z
     parentTaskId: idSchema.nullable(),
     stage: z.string().nullable().default(null),
     idea: z.boolean().default(false),
+    sourceBbProjectId: z.string().nullable().default(null),
     attention: z.enum(["waiting", "failed"]).nullable().default(null),
     agentStatus: z
       .enum(["waiting", "failed", "working", "idle", "completed"])
