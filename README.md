@@ -61,7 +61,8 @@ status                                Show the installed Tasks plugin name and v
 project create|list|show|update       Manage projects, prefixes, Paseo project links, and stages (--stages "A,B,C", "" turns off)
 folder create|list|update|delete      Group projects into folders
 create                                Create a task (--project, --title, --description, --priority, --due, --label, --parent, --attach)
-propose <key-or-id>                   Propose a follow-up idea found while working on a task (--title, --description)
+context                               Show this folder's project, this session's tasks, and open tasks to pick from
+propose [key-or-id]                   Suggest a task for the user to approve (--title, --description); with a key, a follow-up found on that task
 list                                  List and filter tasks (--project, --status, --priority, --label, --active, --needs-you, --search, --sort, --limit, --cursor)
 show <key-or-id>                      Show the task, sub-tasks, comments, attachments, and attached agents
 update <key-or-id>                    Change status, priority, title, description, due date, parent, labels, or stage (--stage <name>, none clears)
@@ -79,7 +80,7 @@ seed-demo --yes                       Create sample folders, projects, labels, t
 
 ### `tasks` MCP server
 
-The same operations are exposed as MCP tools: `tasks_projects`, `tasks_list`, `tasks_show`, `tasks_create`, `tasks_propose_idea`, `tasks_update`, `tasks_comment`, `tasks_delegate`, `tasks_attach`, and `tasks_detach`.
+The same operations are exposed as MCP tools: `tasks_projects`, `tasks_context`, `tasks_list`, `tasks_show`, `tasks_create`, `tasks_propose_idea`, `tasks_update`, `tasks_comment`, `tasks_delegate`, `tasks_attach`, and `tasks_detach`.
 
 With the **Require evidence before agents move a task to In review or Done** setting on (off by default), CLI and MCP status changes to `in_review` or `done` require a task comment for the current work cycle, and agents are told to write one:
 
@@ -94,6 +95,14 @@ Describe gaps or blockers, or say none.
 ```
 
 Choose one verdict: `PASS`, `PASS WITH GAPS`, `FAILED CHECK`, `NOTHING CHECKABLE`, or `BLOCKED`. Any verdict can enter review; `done` requires `PASS`, `PASS WITH GAPS`, or `NOTHING CHECKABLE`. Dispatching an agent or returning the card to an active state requires a new comment. This checks the comment's format; it does not verify its claims. The app's board and task controls remain available for manual changes. Setting `PASEO_TASKS_REQUIRE_EVIDENCE=0` in the daemon environment also turns the check off.
+
+### Tracking without reminders
+
+New sessions keep the board current on their own. At the start of real work (not quick questions) the agent runs `paseo-tasks context`, which shows the project linked to its folder, the tasks the session is attached to, and open tasks it could pick. If one matches, the agent attaches itself and sets it in progress. If none does, it suggests a task with `paseo-tasks propose --title "..."` and keeps working; the suggestion waits as an idea for you to approve, with the session already attached. Along the way it comments at milestones, and at the end it comments the result and moves the task to In review.
+
+A folder that is not linked to any project sends its suggestions to a built-in **Unsorted** project. Approving one asks which project it belongs to and offers to send future work from that folder to the same project, which links the folder to it.
+
+This applies to sessions created after the plugin is installed; existing sessions keep the instructions they started with.
 
 ### Ideas
 
@@ -114,8 +123,9 @@ A comment sent with **Notify agent** is delivered to the agent that last replied
 | Tasks screen | Sidebar item, `/tasks [TASK-KEY]`, command center |
 | Needs you | Tasks screen navigation; across projects, grouped by reason: an agent waiting for approval, an agent that failed, In review, and ideas agents proposed |
 | Workspace board panel | Workspace and explorer panels, command center |
-| Agent task inspector | Agent panel, `/task-panel`, composer pill |
-| Composer pill | Beside the composer for each agent; shows the linked task key |
+| Agent task inspector | Agent panel, `/task-panel`, composer pill on a linked session |
+| Composer pill | Beside the composer for each agent; shows the linked task key, or on a session with no task opens a picker to create a task from it or attach it to one |
+| Sessions without a task | First board column on a project linked to a Paseo project, collapsed by default; adopt live sessions one at a time or all at once |
 | Attachment picker | `@` and `+` pickers in the composer |
 | Settings | **Settings → Plugins → Tasks** |
 
@@ -124,7 +134,7 @@ A comment sent with **Notify agent** is delivered to the agent that last replied
 | Setting | Default | Effect |
 | --- | --- | --- |
 | Inject paseo-tasks CLI and MCP server | on | Adds the helper script directory to an agent's `PATH` and registers the MCP server on new agents |
-| Inject Tasks reporting instructions | on | Appends the report-back contract to an agent's system prompt |
+| Inject Tasks reporting instructions | on | Appends the tracking workflow and report-back contract to an agent's system prompt |
 | Default view | Board | Board or grouped list when the screen opens |
 | Show completed tasks on the board | on | Includes Done and Canceled columns |
 | Require evidence before agents move a task to In review or Done | off | CLI and MCP moves to `in_review` or `done` need an evidence comment (see above) |

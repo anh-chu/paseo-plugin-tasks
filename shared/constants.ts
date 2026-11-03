@@ -73,6 +73,9 @@ export const PRIORITY_LABELS: Readonly<Record<TaskPriority, string>> = {
   none: "No priority",
 };
 
+// Prefix of the project that holds suggestions from unlinked folders.
+export const UNSORTED_PREFIX = "UNS";
+
 export const PROJECT_COLORS = [
   "blue",
   "violet",
@@ -116,16 +119,26 @@ export const TASKS_SKILL_MARKER = "[paseo-plugin-tasks]";
 export function buildTasksInstructions(requireEvidence = false): string {
   return `${TASKS_SKILL_MARKER}
 # Paseo Tasks Integration
-You have access to the Paseo Tasks tracker via both the \`paseo-tasks\` CLI (also aliased as \`bb-tasks\` and \`bb tasks\`) on your PATH and the \`tasks\` MCP server tools.
-- Inspect a task: \`paseo-tasks show ABC-12\` (or \`--json\`) / MCP \`tasks_show\`
-- List tasks: \`paseo-tasks list [--project ABC] [--status in_progress]\` / MCP \`tasks_list\`
-- Create a task: \`paseo-tasks create --project ABC --title "..." [--priority high]\` / MCP \`tasks_create\`
-- Found a follow-up while working (a bug, a limitation, a next step)? Propose it instead of creating a task: \`paseo-tasks propose ABC-12 --title "..." [--description "..."]\` / MCP \`tasks_propose_idea\`. Create tasks only when the user asks.
-- Update status/fields: \`paseo-tasks update ABC-12 --status in_review\` / MCP \`tasks_update\`
-- Change a task's stage only when your own instructions tell you to: \`paseo-tasks update ABC-12 --stage Build\`
-${requireEvidence ? `- Before in_review or done, comment **Evidence for \`ABC-12\`** — VERDICT, followed by nonempty **What ran** and **What was not covered** sections. VERDICT is PASS, PASS WITH GAPS, FAILED CHECK, NOTHING CHECKABLE, or BLOCKED. Describe failures and gaps for review. Done requires PASS, PASS WITH GAPS, or NOTHING CHECKABLE.\n` : ""}- Comment at milestones: \`paseo-tasks comment ABC-12 --body "..." [--notify]\` / MCP \`tasks_comment\`
-- Attach or fetch files: \`paseo-tasks attachment add ABC-12 --file ./out.md\` and \`paseo-tasks attachment get <id> --out ./file\`
-- Attach/detach your agent session: \`paseo-tasks attach ABC-12\` and \`paseo-tasks detach ABC-12\`
+The user tracks work on a Paseo Tasks board. Keep it current without being asked, using the \`paseo-tasks\` CLI on your PATH (also \`bb-tasks\`) or the \`tasks\` MCP tools.
+
+At the start of real work (code changes, investigations, anything over a few steps; not quick questions):
+1. Run \`paseo-tasks context\` / MCP \`tasks_context\`. It shows this folder's project, the tasks this session is attached to, and open tasks to pick from.
+2. Already attached to a task: work on it.
+3. An open task matches the work: \`paseo-tasks attach ABC-12\` / MCP \`tasks_attach\`, then set it in_progress.
+4. Nothing matches, or the folder has no project yet: suggest one with \`paseo-tasks propose --title "..." [--description "..."]\` / MCP \`tasks_propose_idea\`. The user approves it later; do not wait, and do not suggest it again. Do not create tasks unless the user asks.
+
+Keep the task you are attached to current, including one you just suggested and the user has not approved yet.
+While working, comment at milestones (findings, decisions, blockers): \`paseo-tasks comment ABC-12 --body "..."\` / MCP \`tasks_comment\`.
+When the work is done, comment what changed and how you checked it, then set the task in_review.${requireEvidence ? `
+Before in_review or done, comment **Evidence for \`ABC-12\`** — VERDICT, followed by nonempty **What ran** and **What was not covered** sections. VERDICT is PASS, PASS WITH GAPS, FAILED CHECK, NOTHING CHECKABLE, or BLOCKED. Describe failures and gaps for review. Done requires PASS, PASS WITH GAPS, or NOTHING CHECKABLE.` : ""}
+Skip all of this for quick questions and when the user asks you not to track the work. If a step fails, keep working on the user's request.
+
+Other commands:
+- Inspect or list: \`paseo-tasks show ABC-12\`, \`paseo-tasks list [--project ABC] [--status in_progress]\` / MCP \`tasks_show\`, \`tasks_list\`
+- Update fields: \`paseo-tasks update ABC-12 --status in_review\` / MCP \`tasks_update\`. Change a task's stage only when your own instructions tell you to.
+- A follow-up found while on a task (a bug, a next step): \`paseo-tasks propose ABC-12 --title "..."\`
+- Files: \`paseo-tasks attachment add ABC-12 --file ./out.md\` and \`paseo-tasks attachment get <id> --out ./file\`
+- Detach this session: \`paseo-tasks detach ABC-12\`
 - When referring to a task in your reply, emit \`::task{key="ABC-12"}\` on its own line to render a live task card.`;
 }
 

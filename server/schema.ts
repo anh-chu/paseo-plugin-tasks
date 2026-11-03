@@ -238,6 +238,9 @@ const MIGRATIONS = [
     ALTER TABLE task_threads ADD COLUMN waiting_since TEXT;
     ALTER TABLE tasks ADD COLUMN idea INTEGER NOT NULL DEFAULT 0 CHECK (idea IN (0, 1));
   `,
+  `
+    ALTER TABLE tasks ADD COLUMN source_bb_project_id TEXT;
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

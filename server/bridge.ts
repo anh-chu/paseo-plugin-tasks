@@ -171,26 +171,36 @@ const MCP_TOOLS = [
     },
   },
   {
+    name: "tasks_context",
+    description:
+      "Run at the start of real work. Shows this folder's Tasks project, the tasks this session is attached to, and open tasks in the project to pick from.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: "tasks_propose_idea",
     description:
-      "Propose a follow-up idea you found while working on a task (a bug, a limitation, a next step). It waits in the user's Needs you inbox until they accept or dismiss it. Use this instead of tasks_create unless the user asked you to create tasks.",
+      "Suggest a task for the user to approve. Without key: the work you are starting has no matching task; it is suggested in this folder's project (or Unsorted) and this session is attached to it. With key: a follow-up you found while working on that task. Use this instead of tasks_create unless the user asked you to create tasks.",
     inputSchema: {
       type: "object",
       properties: {
         key: {
           type: "string",
-          description: "Key of the task you were working on, such as PROD-1",
+          description: "Optional. Key of the task you were working on, such as PROD-1",
         },
         title: {
           type: "string",
-          description: "Idea title",
+          description: "Task title",
         },
         description: {
           type: "string",
-          description: "Markdown: what you found and why it matters",
+          description: "Markdown: what the work is and why it matters",
         },
       },
-      required: ["key", "title"],
+      required: ["title"],
       additionalProperties: false,
     },
   },
@@ -363,14 +373,13 @@ async function executeMcpToolCall(
         argv.push("--parent", args.parent);
       }
       break;
+    case "tasks_context":
+      argv.push("context", "--json");
+      break;
     case "tasks_propose_idea":
-      argv.push(
-        "propose",
-        String(args.key ?? ""),
-        "--title",
-        String(args.title ?? ""),
-        "--json",
-      );
+      argv.push("propose");
+      if (typeof args.key === "string" && args.key) argv.push(args.key);
+      argv.push("--title", String(args.title ?? ""), "--json");
       if (typeof args.description === "string") {
         argv.push("--description", args.description);
       }

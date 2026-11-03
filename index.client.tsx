@@ -5,13 +5,13 @@ import type {
 import React from "react";
 import { TASK_CARD_KIND, TASK_TEXT_KIND } from "./shared/constants";
 import {
-  getAgentTasksRpc,
   seedDemoRpc,
   taskCardDataSchema,
   tasksAttachmentSource,
   taskTextDataSchema,
 } from "./shared/contract";
 import { transformAssistantTaskDirectives } from "./shared/directive";
+import { AdoptPicker, setAdoptClient } from "./client/adopt";
 import {
   TaskAgentPanel,
   TasksScreen,
@@ -25,6 +25,8 @@ import {
 } from "./client/timeline-card";
 
 export default function contribute(client: PluginClientContext) {
+  setAdoptClient(client);
+
   // 1. Main Screen & Sidebar Header Item
   client.addScreen({
     id: "main",
@@ -177,6 +179,7 @@ export default function contribute(client: PluginClientContext) {
   const registerPill = (agent: {
     id: string;
     workspaceId?: string | null;
+    title?: string | null;
     labels?: Record<string, string>;
   }) => {
     if (lifetime.signal.aborted || !agent.workspaceId) return;
@@ -190,28 +193,42 @@ export default function contribute(client: PluginClientContext) {
         id: "task-pill",
         workspaceId,
         agentId,
-        button: {
-          title: taskKey ? `Open task ${taskKey}` : "Open linked Task panel",
-          icon: "ListTodo",
-          label: taskKey ?? "Task",
-          behavior: {
-            kind: "action",
-            async onPress() {
-              if (taskKey) {
-                client.openPanel("task-detail", { workspaceId, agentId });
-                return;
-              }
-              try {
-                const res = await client.rpc(getAgentTasksRpc, { agentId });
-                if (res.tasks.length > 0) {
+        button: taskKey
+          ? {
+              title: `Open task ${taskKey}`,
+              icon: "ListTodo",
+              label: taskKey,
+              behavior: {
+                kind: "action",
+                onPress() {
                   client.openPanel("task-detail", { workspaceId, agentId });
-                  return;
-                }
-              } catch {}
-              client.openPanel("task-detail", { workspaceId, agentId });
+                },
+              },
+            }
+          : {
+              title: "Add this session to a task",
+              icon: "ListTodo",
+              label: "Task",
+              behavior: {
+                kind: "popover",
+                Content: ({ theme, close }) => {
+                  const openPanel = () => {
+                    close();
+                    client.openPanel("task-detail", { workspaceId, agentId });
+                  };
+                  return (
+                    <AdoptPicker
+                      theme={theme}
+                      agentId={agentId}
+                      agentTitle={agent.title ?? ""}
+                      workspaceId={workspaceId}
+                      onAdopted={openPanel}
+                      onOpenTask={openPanel}
+                    />
+                  );
+                },
+              },
             },
-          },
-        },
       }),
     );
   };

@@ -187,6 +187,36 @@ describe("paseo-plugin-tasks", () => {
     expect((await attempt("done")).exitCode).toBe(0);
   });
 
+  it("lists only live, unadopted sessions in the linked Paseo project", async () => {
+    const project = domain.createProject({ name: "Inbox", prefix: "INB", color: "blue", linkedBbProjectId: "prj_demo123" }).project;
+    const unlinked = domain.createProject({ name: "Loose", prefix: "LSE", color: "blue" }).project;
+    const agent = (id: string, workspaceId: string, extra: Record<string, unknown> = {}) => ({
+      agent: { id, workspaceId, provider: "claude", status: "idle", title: id, updatedAt: "2026-11-01T00:00:00Z", archivedAt: null, ...extra },
+      project: { projectKey: workspaceId === "wks_in" ? "prj_demo123" : "prj_other" },
+    });
+    const paseo = {
+      agents: {
+        list: vi.fn(async () => ({
+          entries: [
+            agent("free", "wks_in", { updatedAt: "2026-11-02T00:00:00Z" }),
+            agent("older", "wks_in"),
+            agent("adopted", "wks_in"),
+            agent("archived", "wks_in", { archivedAt: "2026-11-01T00:00:00Z" }),
+            agent("elsewhere", "wks_out"),
+          ],
+        })),
+        ref: mockPaseo.agents.ref,
+      },
+    };
+    const task = domain.createTask({ projectId: project.id, title: "Taken", status: "todo", priority: "none" });
+    if (!task.ok) throw new Error("task creation failed");
+    await domain.taskThreadsAttach({ taskId: task.task.id, threadId: "adopted" }, paseo as never);
+
+    const { threads } = await domain.listUnattachedThreads({ projectId: project.id }, paseo as never);
+    expect(threads.map((t) => t.id)).toEqual(["free", "older"]);
+    expect(await domain.listUnattachedThreads({ projectId: unlinked.id }, paseo as never)).toEqual({ threads: [] });
+  });
+
   it("sends command-code a supported mode and rejects unknown full-access modes before creating a workspace", async () => {
     const project = domain.createProject({ name: "Demo", prefix: "DEMO", color: "blue", linkedBbProjectId: "prj_demo123" }).project;
     const task = domain.createTask({ projectId: project.id, title: "Example", status: "todo", priority: "medium" });
@@ -1087,6 +1117,44 @@ describe("paseo-plugin-tasks", () => {
       const bodies = async (taskId: string) => (await domain.listComments({ taskId }, null)).comments.map((c) => c.body);
       expect(await bodies(accept.id)).toContain("Idea accepted by You");
       expect(await bodies(dismiss.id)).toContain("Idea dismissed by You");
+    });
+
+    it("suggests work from an unlinked folder into Unsorted, then routes the folder once linked", async () => {
+      // A lone project must not swallow work from folders it is not linked to.
+      domain.createProject({ name: "Ops", prefix: "OPS", color: "blue" });
+      const paseo = {
+        agents: {
+          ref: (id: string) => ({
+            // Background workspaces are missing from workspaces.list, so the
+            // project must come from the agent record.
+            refresh: async () => ({ agent: { id, workspaceId: "wks_x", status: "idle", title: id, archivedAt: null }, project: { projectKey: "prj_new" } }),
+          }),
+        },
+        workspaces: { list: async () => ({ entries: [] }) },
+      };
+      const local = createDomainHandlers(store, () => paseo as never);
+      const cli = (argv: string[], threadId: string) => runTasksCli(argv, store, local, { threadId });
+
+      expect((await cli(["context"], "s1")).stdout).toContain("Folder project: none yet. Still track real work here");
+      const first = await cli(["propose", "--title", "Fix login"], "s1");
+      expect(first.stdout).toContain("Suggested UNS-1  Fix login");
+      const idea = local.getTaskByKey({ taskKey: "UNS-1" }).task!;
+      expect(idea).toMatchObject({ idea: true, sourceBbProjectId: "prj_new" });
+      expect(local.getAgentTasks({ agentId: "s1" }).tasks.map((t) => t.key)).toEqual(["UNS-1"]);
+      expect((await cli(["context"], "s1")).stdout).toContain("UNS-1  Fix login  [suggested, awaiting approval]");
+
+      // What the approval screen does: move, accept, link the folder.
+      const prod = local.createProject({ name: "Product", prefix: "PROD", color: "blue" }).project;
+      const moved = local.moveTaskToProject({ taskId: idea.id, projectId: prod.id });
+      if (!moved.ok) throw new Error(moved.error.message);
+      local.updateTask({ taskId: idea.id, idea: false });
+      local.updateProject({ projectId: prod.id, linkedBbProjectId: "prj_new" });
+      expect(local.getTaskByKey({ taskKey: moved.task.key }).task).toMatchObject({ idea: false, projectId: prod.id });
+
+      expect((await cli(["context"], "s2")).stdout).toMatch(/Folder project: PROD[\s\S]*PROD-1  Fix login/);
+      const second = await cli(["propose", "--title", "Add rate limit"], "s2");
+      expect(second.stdout).toContain("Suggested PROD-2");
+      expect(local.getTaskByKey({ taskKey: "PROD-2" }).task?.sourceBbProjectId).toBeNull();
     });
   });
 

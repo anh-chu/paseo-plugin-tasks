@@ -43,6 +43,7 @@ import {
   renameProjectPrefixRpc,
   searchTaskAttachmentsRpc,
   searchThreadsRpc,
+  listUnattachedThreadsRpc,
   seedDemoRpc,
   sidebarOpenTaskCountRpc,
   sidebarSummaryRpc,
@@ -359,6 +360,10 @@ export default function contribute(server: PluginServerContext) {
   server.handle(searchThreadsRpc, (input, { paseo }) => {
     capturePaseo(paseo);
     return domain.searchThreads(input, paseo);
+  });
+  server.handle(listUnattachedThreadsRpc, (input, { paseo }) => {
+    capturePaseo(paseo);
+    return domain.listUnattachedThreads(input, paseo);
   });
 
   // Preset & Provider Catalog handlers
