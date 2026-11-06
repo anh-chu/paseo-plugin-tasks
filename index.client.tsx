@@ -1,17 +1,21 @@
 import type {
+  PluginButtonIconProps,
   PluginButtonRegistration,
   PluginClientContext,
 } from "@getpaseo/plugin/client";
-import React from "react";
+import { Icon } from "@getpaseo/plugin/client/react-native";
+import React, { useLayoutEffect, useRef } from "react";
+import { Platform, View } from "react-native";
 import { TASK_CARD_KIND, TASK_TEXT_KIND } from "./shared/constants";
 import {
+  listSessionIdeasRpc,
   seedDemoRpc,
   taskCardDataSchema,
   tasksAttachmentSource,
   taskTextDataSchema,
 } from "./shared/contract";
 import { transformAssistantTaskDirectives } from "./shared/directive";
-import { AdoptPicker, setAdoptClient } from "./client/adopt";
+import { AdoptPicker, setAdoptClient, SuggestionPopover } from "./client/adopt";
 import {
   TaskAgentPanel,
   TasksScreen,
@@ -23,6 +27,33 @@ import {
   TaskTimelineCardItem,
   TaskTimelineTextItem,
 } from "./client/timeline-card";
+import type { Task } from "./shared/contract";
+
+// Accent color sets the suggestion pill apart from the status pills beside it.
+// The pill API styles only the icon, so on the web (where a view's ref is its
+// DOM element) the icon also colors the label next to its slot, as the
+// annotations plugin does; native apps get the colored icon only.
+type DomElement = {
+  parentElement: DomElement | null;
+  nextElementSibling: DomElement | null;
+  style: { setProperty(name: string, value: string): void };
+};
+
+function SuggestionIcon({ theme, size }: PluginButtonIconProps) {
+  const ref = useRef<View>(null);
+  useLayoutEffect(() => {
+    if (Platform.OS !== "web") return;
+    const label = (ref.current as unknown as DomElement | null)?.parentElement
+      ?.nextElementSibling;
+    label?.style.setProperty("color", theme.colors.accent);
+    label?.style.setProperty("font-weight", "600");
+  });
+  return (
+    <View ref={ref}>
+      <Icon name="Lightbulb" size={size} color={theme.colors.accent} />
+    </View>
+  );
+}
 
 export default function contribute(client: PluginClientContext) {
   setAdoptClient(client);
@@ -176,6 +207,61 @@ export default function contribute(client: PluginClientContext) {
   const pills = new Map<string, PluginButtonRegistration>();
   const lifetime = new AbortController();
 
+  // 9. Suggestion pill per agent: ideas the session proposed, shown beside the
+  // composer so they do not depend on a ::task line in the reply.
+  const suggestionPills = new Map<string, PluginButtonRegistration>();
+  let ideasByAgent = new Map<string, Task[]>();
+
+  const applySuggestions = (agentId: string) => {
+    const pill = suggestionPills.get(agentId);
+    if (!pill) return;
+    const ideas = ideasByAgent.get(agentId) ?? [];
+    if (ideas.length === 0) return pill.update({ visible: false });
+    pill.update({
+      visible: true,
+      title: ideas.map((task) => task.title).join("\n"),
+      icon: SuggestionIcon,
+      label: ideas.length === 1 ? "1 suggestion" : `${ideas.length} suggestions`,
+      behavior: {
+        kind: "popover",
+        Content: ({ theme, close }) => (
+          <>
+            {ideas.map((task) => (
+              <SuggestionPopover
+                key={task.id}
+                theme={theme}
+                task={task}
+                onDone={() => {
+                  close();
+                  void pollSuggestions();
+                }}
+                onOpenTask={() => {
+                  close();
+                  client.openScreen({ screenId: "main", params: { taskKey: task.key } });
+                }}
+              />
+            ))}
+          </>
+        ),
+      },
+    });
+  };
+
+  const pollSuggestions = async () => {
+    const { ideas } = await client.rpc(listSessionIdeasRpc, {});
+    const next = new Map<string, Task[]>();
+    for (const { threadId, task } of ideas) {
+      next.set(threadId, [...(next.get(threadId) ?? []), task]);
+    }
+    ideasByAgent = next;
+    for (const agentId of suggestionPills.keys()) applySuggestions(agentId);
+  };
+
+  // ponytail: polls because the plugin gets no push event when an idea is
+  // proposed; switch to a subscription if the bridge ever emits task changes.
+  const suggestionTimer = setInterval(() => void pollSuggestions().catch(() => undefined), 5000);
+  void pollSuggestions().catch(() => undefined);
+
   const registerPill = (agent: {
     id: string;
     workspaceId?: string | null;
@@ -186,6 +272,22 @@ export default function contribute(client: PluginClientContext) {
     const agentId = agent.id;
     const workspaceId = agent.workspaceId;
     const taskKey = agent.labels?.taskKey;
+    suggestionPills.get(agentId)?.remove();
+    suggestionPills.set(
+      agentId,
+      client.addComposerPill({
+        id: "task-suggestion",
+        workspaceId,
+        agentId,
+        button: {
+          title: "Suggested task",
+          icon: "Lightbulb",
+          visible: false,
+          behavior: { kind: "action", onPress() {} },
+        },
+      }),
+    );
+    applySuggestions(agentId);
     pills.get(agentId)?.remove();
     pills.set(
       agentId,
@@ -236,6 +338,8 @@ export default function contribute(client: PluginClientContext) {
   const removeAllPills = () => {
     for (const pill of pills.values()) pill.remove();
     pills.clear();
+    for (const pill of suggestionPills.values()) pill.remove();
+    suggestionPills.clear();
   };
 
   void client.paseo.agents
@@ -252,6 +356,8 @@ export default function contribute(client: PluginClientContext) {
           if (update.kind === "upsert") return registerPill(update.agent);
           pills.get(update.agentId)?.remove();
           pills.delete(update.agentId);
+          suggestionPills.get(update.agentId)?.remove();
+          suggestionPills.delete(update.agentId);
         },
       });
       return undefined;
@@ -260,6 +366,7 @@ export default function contribute(client: PluginClientContext) {
 
   return () => {
     lifetime.abort();
+    clearInterval(suggestionTimer);
     removeAllPills();
   };
 }

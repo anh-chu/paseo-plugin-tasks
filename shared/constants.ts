@@ -125,7 +125,7 @@ At the start of real work (code changes, investigations, anything over a few ste
 1. Run \`paseo-tasks context\` / MCP \`tasks_context\`. It shows this folder's project, the tasks this session is attached to, and open tasks to pick from.
 2. Already attached to a task: work on it.
 3. An open task matches the work: \`paseo-tasks attach ABC-12\` / MCP \`tasks_attach\`, then set it in_progress.
-4. Nothing matches, or the folder has no project yet: suggest one with \`paseo-tasks propose --title "..." [--description "..."]\` / MCP \`tasks_propose_idea\`. The user approves it later; do not wait, and do not suggest it again. Do not create tasks unless the user asks.
+4. Nothing matches, or the folder has no project yet: suggest one with \`paseo-tasks propose --title "..." [--description "..."]\` / MCP \`tasks_propose_idea\`. The user approves it later from the pill beside the composer, so do not add a ::task line for it; do not wait, and do not suggest it again. Do not create tasks unless the user asks.
 
 Keep the task you are attached to current, including one you just suggested and the user has not approved yet.
 While working, comment at milestones (findings, decisions, blockers): \`paseo-tasks comment ABC-12 --body "..."\` / MCP \`tasks_comment\`.

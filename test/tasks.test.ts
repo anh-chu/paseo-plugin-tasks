@@ -1141,6 +1141,8 @@ describe("paseo-plugin-tasks", () => {
       const idea = local.getTaskByKey({ taskKey: "UNS-1" }).task!;
       expect(idea).toMatchObject({ idea: true, sourceBbProjectId: "prj_new" });
       expect(local.getAgentTasks({ agentId: "s1" }).tasks.map((t) => t.key)).toEqual(["UNS-1"]);
+      // The composer pill lists the idea under the session that proposed it.
+      expect(local.listSessionIdeas().ideas.map((i) => [i.threadId, i.task.key])).toEqual([["s1", "UNS-1"]]);
       expect((await cli(["context"], "s1")).stdout).toContain("UNS-1  Fix login  [suggested, awaiting approval]");
 
       // What the approval screen does: move, accept, link the folder.
@@ -1150,10 +1152,12 @@ describe("paseo-plugin-tasks", () => {
       local.updateTask({ taskId: idea.id, idea: false });
       local.updateProject({ projectId: prod.id, linkedBbProjectId: "prj_new" });
       expect(local.getTaskByKey({ taskKey: moved.task.key }).task).toMatchObject({ idea: false, projectId: prod.id });
+      expect(local.listSessionIdeas().ideas).toEqual([]);
 
       expect((await cli(["context"], "s2")).stdout).toMatch(/Folder project: PROD[\s\S]*PROD-1  Fix login/);
       const second = await cli(["propose", "--title", "Add rate limit"], "s2");
       expect(second.stdout).toContain("Suggested PROD-2");
+      expect(local.listSessionIdeas().ideas.map((i) => [i.threadId, i.task.key])).toEqual([["s2", "PROD-2"]]);
       expect(local.getTaskByKey({ taskKey: "PROD-2" }).task?.sourceBbProjectId).toBeNull();
     });
   });

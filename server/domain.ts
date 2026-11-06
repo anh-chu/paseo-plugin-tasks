@@ -1739,6 +1739,16 @@ export function createDomainHandlers(
       }
       return { tasks };
     },
+    listSessionIdeas() {
+      const ideas: { threadId: string; task: ApiTask }[] = [];
+      for (const task of store.tasks.listTasks({ needsYou: true })) {
+        if (!task.idea) continue;
+        for (const link of store.tasks.listTaskThreads(task.id)) {
+          ideas.push({ threadId: link.threadId, task: apiTask(store, task) });
+        }
+      }
+      return { ideas };
+    },
     async searchThreads(
       input: { query: string; limit?: number },
       paseoOverride?: PaseoApi | null,

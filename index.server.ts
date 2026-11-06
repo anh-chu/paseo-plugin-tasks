@@ -43,6 +43,7 @@ import {
   renameProjectPrefixRpc,
   searchTaskAttachmentsRpc,
   searchThreadsRpc,
+  listSessionIdeasRpc,
   listUnattachedThreadsRpc,
   seedDemoRpc,
   sidebarOpenTaskCountRpc,
@@ -357,6 +358,7 @@ export default function contribute(server: PluginServerContext) {
     capturePaseo(paseo);
     return domain.getAgentTasks(input);
   });
+  server.handle(listSessionIdeasRpc, () => domain.listSessionIdeas());
   server.handle(searchThreadsRpc, (input, { paseo }) => {
     capturePaseo(paseo);
     return domain.searchThreads(input, paseo);

@@ -761,6 +761,19 @@ export const getAgentTasksRpc = defineRpc({
     .strict(),
 });
 
+// Open suggestions with the sessions that proposed them, for the composer pill.
+export const listSessionIdeasRpc = defineRpc({
+  name: "tasks.list_session_ideas",
+  input: z.object({}).strict(),
+  output: z
+    .object({
+      ideas: z.array(
+        z.object({ threadId: z.string(), task: taskSchema }).strict(),
+      ),
+    })
+    .strict(),
+});
+
 export const searchThreadsRpc = defineRpc({
   name: "tasks.search_threads",
   input: z

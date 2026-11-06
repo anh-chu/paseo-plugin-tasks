@@ -4,7 +4,7 @@ import { Icon, TextInput, useToast } from "@getpaseo/plugin/client/react-native"
 import { useQuery } from "@tanstack/react-query";
 import React, { useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import type { TaskStatus } from "../shared/constants";
+import { type TaskStatus, UNSORTED_PREFIX } from "../shared/constants";
 import {
   attachTaskThreadRpc,
   createTaskRpc,
@@ -14,6 +14,7 @@ import {
   listUnattachedThreadsRpc,
   type Project,
   type Task,
+  updateTaskRpc,
 } from "../shared/contract";
 import { formatRelativeTime } from "./badges";
 import { MenuButton } from "./menu";
@@ -261,6 +262,91 @@ export function AdoptPicker({
         <Text style={{ color: theme.colors.statusDanger, fontSize: 11 }}>
           {error}
         </Text>
+      ) : null}
+    </View>
+  );
+}
+
+// Composer pill popover for an idea this session proposed.
+export function SuggestionPopover({
+  theme,
+  task,
+  onDone,
+  onOpenTask,
+}: {
+  theme: PluginTheme;
+  task: Task;
+  onDone: () => void;
+  onOpenTask: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function decide(status?: "canceled") {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await client().rpc(updateTaskRpc, {
+        taskId: task.id,
+        idea: false,
+        ...(status ? { status } : {}),
+      });
+      if (!res.ok) throw new Error(res.error.message);
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  }
+
+  // Ideas in Unsorted are accepted from the task, after filing into a project.
+  const unsorted = task.key.startsWith(`${UNSORTED_PREFIX}-`);
+  const button = (primary: boolean) =>
+    ({
+      flex: 1,
+      paddingVertical: 7,
+      borderRadius: 8,
+      alignItems: "center",
+      backgroundColor: primary ? theme.colors.accent : theme.colors.surface2,
+      opacity: busy ? 0.5 : 1,
+    }) as const;
+
+  return (
+    <View style={{ gap: 8, padding: 12, minWidth: 280, maxWidth: 360 }}>
+      <TaskRow theme={theme} task={task} onPress={onOpenTask} />
+      {task.description.trim() ? (
+        <Text
+          numberOfLines={4}
+          style={{ color: theme.colors.foregroundMuted, fontSize: 12, paddingHorizontal: 8 }}
+        >
+          {task.description.trim()}
+        </Text>
+      ) : null}
+      <View style={{ flexDirection: "row", gap: 6 }}>
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          onPress={() => (unsorted ? onOpenTask() : void decide())}
+          style={button(true)}
+        >
+          <Text style={{ color: theme.colors.accentForeground, fontSize: 12, fontWeight: "700" }}>
+            {unsorted ? "Choose project" : "Accept"}
+          </Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          onPress={() => void decide("canceled")}
+          style={button(false)}
+        >
+          <Text style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "600" }}>
+            Dismiss
+          </Text>
+        </Pressable>
+      </View>
+      {error ? (
+        <Text style={{ color: theme.colors.statusDanger, fontSize: 11 }}>{error}</Text>
       ) : null}
     </View>
   );
