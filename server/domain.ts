@@ -22,6 +22,7 @@ import type {
   Task as ApiTask,
   TaskPullRequest,
   TasksDomainError,
+  WaitingRequest,
 } from "../shared/contract";
 import {
   AttachmentReferencedError,
@@ -722,6 +723,48 @@ export async function createCommentWithDelivery(
     console.warn(`Failed async comment notification ${comment.id}:`, error);
   });
   return comment;
+}
+
+type PendingPermission = {
+  id: string;
+  name: string;
+  kind: string;
+  title?: string;
+  description?: string;
+  input?: Record<string, unknown>;
+  actions?: { id: string; label: string; behavior: "allow" | "deny" }[];
+};
+
+const text = (value: unknown): string => (typeof value === "string" ? value : "");
+
+// Flattens an agent's pending permission into what the task view shows. A
+// question (AskUserQuestion and the like) carries `input.questions`.
+export function toWaitingRequest(
+  thread: { threadId: string; title: string; workspaceId?: string | null },
+  request: PendingPermission,
+): WaitingRequest {
+  const rawQuestions = Array.isArray(request.input?.questions) ? request.input.questions : [];
+  const questions = rawQuestions.flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const q = raw as Record<string, unknown>;
+    const options = (Array.isArray(q.options) ? q.options : []).flatMap((o) => {
+      const option = o as Record<string, unknown> | null;
+      return option && text(option.label) ? [{ label: text(option.label), description: text(option.description) }] : [];
+    });
+    const question = text(q.question);
+    return question ? [{ header: text(q.header) || question, question, multiSelect: q.multiSelect === true, options }] : [];
+  });
+  return {
+    threadId: thread.threadId,
+    threadTitle: thread.title,
+    workspaceId: thread.workspaceId ?? null,
+    requestId: request.id,
+    kind: request.kind,
+    title: request.title || request.name,
+    description: request.description ?? "",
+    questions,
+    actions: (request.actions ?? []).map(({ id, label, behavior }) => ({ id, label, behavior })),
+  };
 }
 
 async function lookupPullRequestForCwd(
@@ -1491,6 +1534,57 @@ export function createDomainHandlers(
         ),
         unavailableThreadIds: unavailable,
       };
+    },
+    async listWaiting(
+      input: { taskId: string },
+      paseoOverride?: PaseoApi | null,
+    ): Promise<{ requests: WaitingRequest[] }> {
+      const paseo = paseoOverride ?? getPaseo();
+      const live = store.tasks
+        .listTaskThreads(input.taskId)
+        .filter((tt) => tt.liveStatus !== "completed" && tt.liveStatus !== "failed");
+      if (!paseo || live.length === 0) return { requests: [] };
+      const perThread = await Promise.all(
+        live.map(async (tt) => {
+          const current = await paseo.agents.ref(tt.threadId).refresh().catch(() => null);
+          return (current?.agent.pendingPermissions ?? []).map((request) =>
+            toWaitingRequest(tt, request),
+          );
+        }),
+      );
+      return { requests: perThread.flat() };
+    },
+    async answerWaiting(
+      input: {
+        threadId: string;
+        requestId: string;
+        answers?: Record<string, string>;
+        behavior?: "allow" | "deny";
+        actionId?: string;
+        message?: string;
+      },
+      paseoOverride?: PaseoApi | null,
+    ): Promise<{ ok: boolean; alreadyAnswered: boolean; error: string | null }> {
+      const paseo = paseoOverride ?? getPaseo();
+      if (!paseo) return { ok: false, alreadyAnswered: false, error: "Paseo is not connected yet." };
+      const agent = paseo.agents.ref(input.threadId);
+      const current = await agent.refresh().catch(() => null);
+      const pending = current?.agent.pendingPermissions ?? [];
+      if (!pending.some((request) => request.id === input.requestId)) {
+        return { ok: false, alreadyAnswered: true, error: null };
+      }
+      const message = input.message?.trim() || undefined;
+      const response = input.answers
+        ? { behavior: "allow" as const, updatedInput: { answers: input.answers } }
+        : input.behavior === "deny"
+          ? { behavior: "deny" as const, selectedActionId: input.actionId, message }
+          : { behavior: "allow" as const, selectedActionId: input.actionId };
+      try {
+        await agent.respondToPermission({ requestId: input.requestId, response });
+        return { ok: true, alreadyAnswered: false, error: null };
+      } catch (error) {
+        return { ok: false, alreadyAnswered: false, error: error instanceof Error ? error.message : String(error) };
+      }
     },
     async delegate(
       input: {

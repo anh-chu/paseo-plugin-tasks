@@ -35,6 +35,8 @@ import {
   listProjectsRpc,
   listProviderCatalogRpc,
   listTaskPullRequestsRpc,
+  listWaitingRpc,
+  answerWaitingRpc,
   listTasksRpc,
   listTaskThreadsRpc,
   moveFolderRpc,
@@ -338,6 +340,16 @@ export default function contribute(server: PluginServerContext) {
     capturePaseo(paseo);
     return domain.listTaskThreads(input);
   });
+  server.handle(listWaitingRpc, (input, { paseo }) => {
+    capturePaseo(paseo);
+    return domain.listWaiting(input, paseo);
+  });
+
+  server.handle(answerWaitingRpc, (input, { paseo }) => {
+    capturePaseo(paseo);
+    return domain.answerWaiting(input, paseo);
+  });
+
   server.handle(listTaskPullRequestsRpc, (input, { paseo }) => {
     capturePaseo(paseo);
     return domain.listTaskPullRequests(input, paseo);

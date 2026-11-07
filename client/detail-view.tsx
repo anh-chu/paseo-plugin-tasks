@@ -36,6 +36,8 @@ import {
   listProjectsRpc,
   listTaskPullRequestsRpc,
   listTasksRpc,
+  listWaitingRpc,
+  answerWaitingRpc,
   listTaskThreadsRpc,
   moveTaskToProjectRpc,
   searchThreadsRpc,
@@ -44,6 +46,7 @@ import {
   uploadAttachmentRpc,
   type Project,
   type Task,
+  type WaitingRequest,
 } from "../shared/contract";
 import {
   formatRelativeTime,
@@ -620,6 +623,13 @@ export function TaskDetailView({
           }}
         />
       ) : null}
+
+      <WaitingOnYou
+        theme={theme}
+        taskId={task.id}
+        openAgent={openAgent}
+        openWorkspace={openWorkspace}
+      />
 
       {/* Title & Description */}
       {editingHeader ? (
@@ -2016,6 +2026,236 @@ function AcceptIntoProject({
           {target ? `Accept into ${target.prefix}` : "Accept"}
         </Text>
       </Pressable>
+    </View>
+  );
+}
+
+// What attached agents are waiting on the user for, answered in place. Read
+// live from the agents; the existing permission hooks clear Needs you after.
+function WaitingOnYou({
+  theme,
+  taskId,
+  openAgent,
+  openWorkspace,
+}: {
+  theme: PluginTheme;
+  taskId: string;
+  openAgent?: (input: { readonly agentId: string }) => void;
+  openWorkspace?: (input: { readonly workspaceId: string }) => void;
+}) {
+  const queryClient = useQueryClient();
+  const listWaiting = useRpc(listWaitingRpc);
+  const waitingQuery = useQuery({
+    queryKey: ["tasks", "waiting", taskId],
+    queryFn: () => listWaiting({ taskId }),
+    refetchInterval: 3000,
+  });
+  const requests = waitingQuery.data?.requests ?? [];
+  if (requests.length === 0) return null;
+
+  return (
+    <View style={{ padding: 12, borderRadius: 10, backgroundColor: theme.colors.surface1, gap: 12 }}>
+      <Text style={{ color: theme.colors.foreground, fontSize: 13, fontWeight: "600" }}>
+        Waiting on you
+      </Text>
+      {requests.map((request) => (
+        <WaitingRequestBlock
+          key={`${request.threadId}:${request.requestId}`}
+          theme={theme}
+          request={request}
+          openAgent={openAgent}
+          openWorkspace={openWorkspace}
+          onDone={() => void queryClient.invalidateQueries({ queryKey: ["tasks"] })}
+        />
+      ))}
+    </View>
+  );
+}
+
+function WaitingRequestBlock({
+  theme,
+  request,
+  openAgent,
+  openWorkspace,
+  onDone,
+}: {
+  theme: PluginTheme;
+  request: WaitingRequest;
+  openAgent?: (input: { readonly agentId: string }) => void;
+  openWorkspace?: (input: { readonly workspaceId: string }) => void;
+  onDone: () => void;
+}) {
+  const toast = useToast();
+  const answerWaiting = useRpc(answerWaitingRpc);
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const isQuestion = request.questions.length > 0;
+  const trimmed = comment.trim();
+  const canSend = isQuestion && request.questions.every((q) => (picked[q.header]?.length ?? 0) > 0 || trimmed);
+
+  function pick(header: string, label: string, multi: boolean) {
+    setPicked((prev) => {
+      const current = prev[header] ?? [];
+      const next = multi
+        ? current.includes(label) ? current.filter((l) => l !== label) : [...current, label]
+        : [label];
+      return { ...prev, [header]: next };
+    });
+  }
+
+  async function send(input: { answers?: Record<string, string>; behavior?: "allow" | "deny"; actionId?: string }) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await answerWaiting({
+        threadId: request.threadId,
+        requestId: request.requestId,
+        ...input,
+        message: trimmed || undefined,
+      });
+      if (result.alreadyAnswered) toast.show("Already answered", { variant: "info" });
+      else if (!result.ok) throw new Error(result.error ?? "Could not send the answer");
+      onDone();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function sendAnswers() {
+    // A comment rides along with the picked options; alone it is the answer.
+    const answers = Object.fromEntries(
+      request.questions.map((q) => {
+        const labels = (picked[q.header] ?? []).join(", ");
+        return [q.header, labels && trimmed ? `${labels}. ${trimmed}` : labels || trimmed];
+      }),
+    );
+    void send({ answers });
+  }
+
+  const button = (primary: boolean) => ({
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: primary ? theme.colors.accent : theme.colors.surface2,
+    opacity: busy ? 0.6 : 1,
+  });
+  const buttonText = (primary: boolean) => ({
+    color: primary ? theme.colors.accentForeground : theme.colors.foreground,
+    fontSize: 12,
+    fontWeight: "600" as const,
+  });
+  const link = { color: theme.colors.foregroundMuted, fontSize: 12 };
+
+  return (
+    <View style={{ gap: 8 }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+        <Pressable
+          accessibilityRole="link"
+          disabled={!openAgent}
+          onPress={() => openAgent?.({ agentId: request.threadId })}
+        >
+          <Text style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "500" }}>
+            {request.threadTitle}
+          </Text>
+        </Pressable>
+        {openWorkspace && request.workspaceId ? (
+          <Pressable
+            accessibilityRole="link"
+            onPress={() => openWorkspace({ workspaceId: request.workspaceId! })}
+          >
+            <Text style={link}>View progress</Text>
+          </Pressable>
+        ) : null}
+      </View>
+
+      {isQuestion ? (
+        request.questions.map((q) => (
+          <View key={q.header} style={{ gap: 6 }}>
+            <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>{q.question}</Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+              {q.options.map((option) => {
+                const selected = (picked[q.header] ?? []).includes(option.label);
+                return (
+                  <Pressable
+                    key={option.label}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    accessibilityHint={option.description || undefined}
+                    onPress={() => pick(q.header, option.label, q.multiSelect)}
+                    style={{
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                      borderRadius: 7,
+                      borderWidth: 1,
+                      borderColor: selected ? theme.colors.foreground : theme.colors.border,
+                      backgroundColor: selected ? theme.colors.surface2 : "transparent",
+                    }}
+                  >
+                    <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>{option.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        ))
+      ) : (
+        <View style={{ gap: 4 }}>
+          <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>{request.title}</Text>
+          {request.description ? (
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>{request.description}</Text>
+          ) : null}
+        </View>
+      )}
+
+      <TextInput
+        value={comment}
+        onChangeText={setComment}
+        multiline
+        placeholder="Comment"
+        placeholderTextColor={theme.colors.foregroundMuted}
+        style={{
+          minHeight: 36,
+          paddingHorizontal: 10,
+          paddingVertical: 7,
+          borderRadius: 8,
+          backgroundColor: theme.colors.surface2,
+          color: theme.colors.foreground,
+          fontSize: 13,
+          textAlignVertical: "top",
+        }}
+      />
+
+      <View style={{ flexDirection: "row", gap: 8, justifyContent: "flex-end" }}>
+        {isQuestion ? (
+          <Pressable accessibilityRole="button" disabled={!canSend || busy} onPress={sendAnswers} style={{ ...button(true), opacity: canSend && !busy ? 1 : 0.5 }}>
+            <Text style={buttonText(true)}>Send</Text>
+          </Pressable>
+        ) : request.actions.length > 0 ? (
+          request.actions.map((action) => (
+            <Pressable
+              key={action.id}
+              accessibilityRole="button"
+              disabled={busy}
+              onPress={() => void send({ behavior: action.behavior, actionId: action.id })}
+              style={button(action.behavior === "allow")}
+            >
+              <Text style={buttonText(action.behavior === "allow")}>{action.label}</Text>
+            </Pressable>
+          ))
+        ) : (
+          <>
+            <Pressable accessibilityRole="button" disabled={busy} onPress={() => void send({ behavior: "deny" })} style={button(false)}>
+              <Text style={buttonText(false)}>Deny</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" disabled={busy} onPress={() => void send({ behavior: "allow" })} style={button(true)}>
+              <Text style={buttonText(true)}>Allow</Text>
+            </Pressable>
+          </>
+        )}
+      </View>
     </View>
   );
 }

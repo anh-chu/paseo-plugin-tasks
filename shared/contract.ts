@@ -740,6 +740,59 @@ export const attachTaskThreadRpc = defineRpc({
   output: z.object({ threadId: z.string() }).strict(),
 });
 
+// What an attached agent is waiting on the user for: a question to answer or a
+// permission to allow or deny. Read live from the agent, not stored.
+export const waitingQuestionSchema = z
+  .object({
+    header: z.string(),
+    question: z.string(),
+    multiSelect: z.boolean(),
+    options: z.array(z.object({ label: z.string(), description: z.string() }).strict()),
+  })
+  .strict();
+
+export const waitingRequestSchema = z
+  .object({
+    threadId: z.string(),
+    threadTitle: z.string(),
+    workspaceId: z.string().nullable(),
+    requestId: z.string(),
+    kind: z.string(),
+    title: z.string(),
+    description: z.string(),
+    questions: z.array(waitingQuestionSchema),
+    actions: z
+      .array(z.object({ id: z.string(), label: z.string(), behavior: z.enum(["allow", "deny"]) }).strict()),
+  })
+  .strict();
+
+export type WaitingRequest = z.infer<typeof waitingRequestSchema>;
+
+export const listWaitingRpc = defineRpc({
+  name: "tasks.list_waiting",
+  input: z.object({ taskId: idSchema }).strict(),
+  output: z.object({ requests: z.array(waitingRequestSchema) }).strict(),
+});
+
+export const answerWaitingRpc = defineRpc({
+  name: "tasks.answer_waiting",
+  input: z
+    .object({
+      threadId: nonBlankStringSchema,
+      requestId: nonBlankStringSchema,
+      // Questions: answers keyed by question header. Permissions: a behavior,
+      // with the chosen action id when the request offers actions.
+      answers: z.record(z.string(), z.string()).optional(),
+      behavior: z.enum(["allow", "deny"]).optional(),
+      actionId: z.string().optional(),
+      message: z.string().optional(),
+    })
+    .strict(),
+  output: z
+    .object({ ok: z.boolean(), alreadyAnswered: z.boolean(), error: z.string().nullable() })
+    .strict(),
+});
+
 export const detachTaskThreadRpc = defineRpc({
   name: "tasks.task_threads_detach",
   input: z
