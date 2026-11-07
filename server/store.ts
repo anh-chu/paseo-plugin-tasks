@@ -399,6 +399,7 @@ const TASK_ATTENTION_COLUMN = `
       SELECT 1 FROM task_threads tt
       WHERE tt.task_id = t.id AND tt.live_status = 'failed'
     ) THEN 'failed'
+    WHEN t.status = 'in_progress' AND t.stopped_since IS NOT NULL THEN 'stopped'
   END AS attention
 `;
 
@@ -1048,6 +1049,7 @@ export function createTasksStore(db: PluginDatabase) {
           WHERE tt.task_id = t.id
             AND (tt.waiting_since IS NOT NULL OR tt.live_status = 'failed')
         ))
+        OR (t.status = 'in_progress' AND t.stopped_since IS NOT NULL)
       )`);
     } else {
       // Proposed ideas stay out of the board until the user accepts them.
@@ -1276,13 +1278,15 @@ export function createTasksStore(db: PluginDatabase) {
           number,
           number,
           string,
+          Task["status"],
           string,
         ]
       >(
         `
         UPDATE tasks SET
           title = ?, description = ?, status = ?, priority = ?, due_date = ?,
-          parent_task_id = ?, stage = ?, idea = ?, position = ?, updated_at = ?
+          parent_task_id = ?, stage = ?, idea = ?, position = ?, updated_at = ?,
+          stopped_since = CASE WHEN status = ? THEN stopped_since ELSE NULL END
         WHERE id = ?
       `,
       ).run(
@@ -1300,6 +1304,7 @@ export function createTasksStore(db: PluginDatabase) {
         (input.idea ?? current.idea) ? 1 : 0,
         position,
         nowIso(),
+        status,
         id,
       );
       return requireTask(id);
@@ -1495,11 +1500,13 @@ export function createTasksStore(db: PluginDatabase) {
             .get(task.projectId, input.status, id)?.position ?? POSITION_STEP;
       }
 
-      db.prepare<[Task["status"], number, string, string]>(
+      db.prepare<[Task["status"], number, string, Task["status"], string]>(
         `
-        UPDATE tasks SET status = ?, position = ?, updated_at = ? WHERE id = ?
+        UPDATE tasks SET status = ?, position = ?, updated_at = ?,
+          stopped_since = CASE WHEN status = ? THEN stopped_since ELSE NULL END
+        WHERE id = ?
       `,
-      ).run(input.status, position, nowIso(), id);
+      ).run(input.status, position, nowIso(), input.status, id);
       return requireTask(id);
     },
   );
@@ -1924,6 +1931,63 @@ export function createTasksStore(db: PluginDatabase) {
 
   // Marks every session of this agent as waiting for the user's approval, or
   // clears it.
+  // Agents started by an attached agent (a Playbooks manager's step agents)
+  // count as that task's work when deciding whether it has stopped.
+  function recordAgentParent(agentId: string, parentId: string): void {
+    db.prepare<[string, string]>(
+      "INSERT OR REPLACE INTO agent_parents (agent_id, parent_id) VALUES (?, ?)",
+    ).run(agentId, parentId);
+  }
+
+  function listChildAgentIds(parentId: string): string[] {
+    return db
+      .prepare<[string], { agent_id: string }>("SELECT agent_id FROM agent_parents WHERE parent_id = ?")
+      .all(parentId)
+      .map((row) => row.agent_id);
+  }
+
+  function getTaskThreadLastMessage(threadId: string): string | null {
+    return db
+      .prepare<[string], { last_message: string | null }>(
+        "SELECT last_message FROM task_threads WHERE thread_id = ? AND last_message IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
+      )
+      .get(threadId)?.last_message ?? null;
+  }
+
+  function setTaskThreadsLastMessage(threadId: string, message: string): void {
+    db.prepare<[string, string]>(
+      "UPDATE task_threads SET last_message = ? WHERE thread_id = ?",
+    ).run(message, threadId);
+  }
+
+  // In-progress tasks with attached agents: the ones that can stop.
+  function listStoppableTasks(): { taskId: string; stoppedSince: string | null; threads: { threadId: string; updatedAt: string; lastMessage: string | null }[] }[] {
+    const rows = db
+      .prepare<[], { task_id: string; stopped_since: string | null; thread_id: string; updated_at: string; last_message: string | null }>(`
+        SELECT t.id AS task_id, t.stopped_since, tt.thread_id, tt.updated_at, tt.last_message
+        FROM tasks t JOIN task_threads tt ON tt.task_id = t.id
+        WHERE t.status = 'in_progress'
+      `)
+      .all();
+    const byTask = new Map<string, { taskId: string; stoppedSince: string | null; threads: { threadId: string; updatedAt: string; lastMessage: string | null }[] }>();
+    for (const row of rows) {
+      const entry = byTask.get(row.task_id) ?? { taskId: row.task_id, stoppedSince: row.stopped_since, threads: [] };
+      entry.threads.push({ threadId: row.thread_id, updatedAt: row.updated_at, lastMessage: row.last_message });
+      byTask.set(row.task_id, entry);
+    }
+    return [...byTask.values()];
+  }
+
+  function setTaskStoppedSince(taskId: string, since: string | null): void {
+    db.prepare<[string | null, string]>("UPDATE tasks SET stopped_since = ? WHERE id = ?").run(since, taskId);
+  }
+
+  function getTaskStoppedSince(taskId: string): string | null {
+    return db
+      .prepare<[string], { stopped_since: string | null }>("SELECT stopped_since FROM tasks WHERE id = ?")
+      .get(taskId)?.stopped_since ?? null;
+  }
+
   function setTaskThreadsWaiting(threadId: string, waiting: boolean): void {
     db.prepare<[string | null, string]>(
       "UPDATE task_threads SET waiting_since = ? WHERE thread_id = ?",
@@ -2210,6 +2274,13 @@ export function createTasksStore(db: PluginDatabase) {
     listUnfinishedTaskThreads,
     setTaskThreadTurnStartedAt,
     setTaskThreadsWaiting,
+    recordAgentParent,
+    listChildAgentIds,
+    setTaskThreadsLastMessage,
+    getTaskThreadLastMessage,
+    listStoppableTasks,
+    setTaskStoppedSince,
+    getTaskStoppedSince,
     takeTaskThreadTurnStartedAt,
     lastSilentStopAt,
     getTaskThreadHeartbeatId,

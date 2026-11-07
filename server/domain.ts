@@ -1544,12 +1544,26 @@ export function createDomainHandlers(
         .listTaskThreads(input.taskId)
         .filter((tt) => tt.liveStatus !== "completed" && tt.liveStatus !== "failed");
       if (!paseo || live.length === 0) return { requests: [] };
+      const stopped = store.tasks.getTaskStoppedSince(input.taskId);
       const perThread = await Promise.all(
         live.map(async (tt) => {
           const current = await paseo.agents.ref(tt.threadId).refresh().catch(() => null);
-          return (current?.agent.pendingPermissions ?? []).map((request) =>
+          const pending = (current?.agent.pendingPermissions ?? []).map((request) =>
             toWaitingRequest(tt, request),
           );
+          if (pending.length > 0 || !stopped) return pending;
+          // Nothing to answer, but the work stopped: show what the agent said last.
+          return [{
+            threadId: tt.threadId,
+            threadTitle: tt.title,
+            workspaceId: tt.workspaceId ?? null,
+            requestId: STOPPED_REQUEST_ID,
+            kind: "stopped",
+            title: stopped, // when it stopped; the task view formats it
+            description: store.tasks.getTaskThreadLastMessage(tt.threadId) ?? "",
+            questions: [],
+            actions: [],
+          }];
         }),
       );
       return { requests: perThread.flat() };
@@ -1568,6 +1582,16 @@ export function createDomainHandlers(
       const paseo = paseoOverride ?? getPaseo();
       if (!paseo) return { ok: false, alreadyAnswered: false, error: "Paseo is not connected yet." };
       const agent = paseo.agents.ref(input.threadId);
+      if (input.requestId === STOPPED_REQUEST_ID) {
+        const text = input.message?.trim();
+        if (!text) return { ok: false, alreadyAnswered: false, error: "Write a reply first." };
+        try {
+          await agent.send(text);
+          return { ok: true, alreadyAnswered: false, error: null };
+        } catch (error) {
+          return { ok: false, alreadyAnswered: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
       const current = await agent.refresh().catch(() => null);
       const pending = current?.agent.pendingPermissions ?? [];
       if (!pending.some((request) => request.id === input.requestId)) {
@@ -1591,6 +1615,8 @@ export function createDomainHandlers(
         taskId: string;
         presetId: string;
         extraInstructions?: string;
+        // Give the preset to this already-running session instead of starting a new agent.
+        threadId?: string;
       },
       paseoOverride?: PaseoApi | null,
     ) {
@@ -1608,6 +1634,31 @@ export function createDomainHandlers(
       const preset = store.tasks.getPreset(input.presetId);
       if (!preset) throw new Error(`Preset not found: ${input.presetId}`);
       const modeId = mapPermissionModeToModeId(preset.providerId, preset.permissionMode);
+
+      const comments = store.tasks.listComments(task.id);
+      const recentComments = comments.slice(-RECENT_COMMENT_LIMIT);
+      const attachments = [
+        ...store.tasks.listAttachmentsForTask(task.id),
+        ...store.tasks.listAttachmentsForTaskComments(task.id),
+      ];
+      const title = delegatedThreadTitle(task);
+      const prompt = buildSeedPrompt({
+        task,
+        project,
+        subtasks: store.tasks.listSubtasks(task.id),
+        attachments,
+        recentComments,
+        threads: store.tasks.listTaskThreads(task.id),
+        requireEvidence: await requireEvidence(),
+        presetInstructions: preset.instructions,
+        extraInstructions: input.extraInstructions,
+      });
+
+
+      if (input.threadId) {
+        return handOverToSession(store, paseo, task, preset, input.threadId, prompt);
+      }
+
 
       const { projects: paseoProjects } = await paseo.projects.list();
       let targetProject = project.linkedBbProjectId
@@ -1628,25 +1679,6 @@ export function createDomainHandlers(
           `Task project "${project.name}" (${project.prefix}) is not linked to a Paseo project. Link it in Manage → Projects first.`,
         );
       }
-
-      const comments = store.tasks.listComments(task.id);
-      const recentComments = comments.slice(-RECENT_COMMENT_LIMIT);
-      const attachments = [
-        ...store.tasks.listAttachmentsForTask(task.id),
-        ...store.tasks.listAttachmentsForTaskComments(task.id),
-      ];
-      const title = delegatedThreadTitle(task);
-      const prompt = buildSeedPrompt({
-        task,
-        project,
-        subtasks: store.tasks.listSubtasks(task.id),
-        attachments,
-        recentComments,
-        threads: store.tasks.listTaskThreads(task.id),
-        requireEvidence: await requireEvidence(),
-        presetInstructions: preset.instructions,
-        extraInstructions: input.extraInstructions,
-      });
 
       const useWorktree =
         preset.environmentKind === "new-worktree" &&
@@ -2468,6 +2500,92 @@ export function reconcileOnFirstCapture(
   };
 }
 
+// Hands a task to a session that already exists: it keeps its own context and
+// gets the preset's instructions as its next message. The session is reloaded
+// first, so plugins that add tools when a session opens (Playbooks' manager
+// tools) give them to it now.
+async function handOverToSession(
+  store: TasksApiStore,
+  paseo: PaseoApi,
+  task: StoredTask,
+  preset: Preset,
+  threadId: string,
+  prompt: string,
+): Promise<{ threadId: string; workspaceId: string | null }> {
+  const handle = paseo.agents.ref(threadId);
+  const current = (await handle.refresh())?.agent;
+  if (!current || current.archivedAt) throw new Error("That session no longer exists.");
+  if (current.status === "running") throw new Error("That session is busy. Hand it over when it is idle.");
+  // ponytail: reload() is in the daemon's client but not in the 0.11.2 typings
+  // this plugin builds against; drop the cast after upgrading @getpaseo/plugin.
+  await (handle as unknown as { reload?: () => Promise<unknown> }).reload?.();
+  await handle.send(prompt);
+  store.transaction(() => {
+    const attached = store.tasks.listTaskThreads(task.id).some((t) => t.threadId === threadId);
+    if (!attached) {
+      store.tasks.upsertTaskThread({
+        taskId: task.id,
+        threadId,
+        workspaceId: current.workspaceId ?? null,
+        presetName: preset.name,
+        title: current.title ?? task.title,
+        liveStatus: "working",
+      });
+    }
+    if (task.status === "backlog" || task.status === "todo" || task.status === "on_hold") {
+      store.tasks.updateTask(task.id, { status: "in_progress" });
+    }
+    store.tasks.createComment({
+      taskId: task.id,
+      kind: "system",
+      authorName: SYSTEM_AUTHOR_NAME,
+      presetName: preset.name,
+      threadId,
+      body: `Dispatched to ${preset.name} · handed to session "${current.title ?? threadId}"`,
+    });
+  });
+  return { threadId, workspaceId: current.workspaceId ?? null };
+}
+
+export const STOPPED_AFTER_MS = 10 * 60 * 1000;
+// The "request" a stopped agent shows in Waiting on you; a reply is sent as a message.
+export const STOPPED_REQUEST_ID = "stopped";
+
+type LiveAgent = { status: string; updatedAt: string; pendingPermissions?: readonly unknown[] | null };
+
+// A task in progress has stopped when none of its attached agents, nor the
+// agents they started, is working or asking the user, and nothing has moved
+// for STOPPED_AFTER_MS. Returns when it stopped, or null while it is moving.
+export function stoppedSince(
+  threads: readonly { threadId: string; updatedAt: string }[],
+  childIds: readonly string[],
+  live: ReadonlyMap<string, LiveAgent>,
+  now: number,
+): string | null {
+  const ids = [...threads.map((t) => t.threadId), ...childIds];
+  const agents = ids.map((id) => live.get(id)).filter((a): a is LiveAgent => Boolean(a));
+  if (agents.some((a) => a.status === "running" || a.status === "initializing")) return null;
+  if (agents.some((a) => (a.pendingPermissions?.length ?? 0) > 0)) return null;
+  const last = Math.max(
+    ...threads.map((t) => Date.parse(t.updatedAt)),
+    ...agents.map((a) => Date.parse(a.updatedAt)),
+  );
+  if (!Number.isFinite(last) || now - last < STOPPED_AFTER_MS) return null;
+  return new Date(last).toISOString();
+}
+
+export async function sweepStoppedTasks(store: TasksApiStore, paseo: PaseoApi, now = Date.now()): Promise<void> {
+  const candidates = store.tasks.listStoppableTasks();
+  if (candidates.length === 0) return;
+  const { entries } = await paseo.agents.list();
+  const live = new Map(entries.map((entry) => [entry.agent.id, entry.agent as LiveAgent]));
+  for (const task of candidates) {
+    const children = task.threads.flatMap((t) => store.tasks.listChildAgentIds(t.threadId));
+    const since = stoppedSince(task.threads, children, live, now);
+    if ((since === null) !== (task.stoppedSince === null)) store.tasks.setTaskStoppedSince(task.taskId, since);
+  }
+}
+
 export function registerLifecycleHooks(
   server: PluginServerContext,
   store: TasksApiStore,
@@ -2476,6 +2594,7 @@ export function registerLifecycleHooks(
 ): void {
   server.on("agent.created", ({ agent }, { paseo }) => {
     onPaseoCaptured(paseo);
+    if (agent.parentAgentId) store.tasks.recordAgentParent(agent.id, agent.parentAgentId);
     transitionTrackedThread(store, agent.id, "starting");
   });
 
@@ -2500,6 +2619,7 @@ export function registerLifecycleHooks(
       transitionTrackedThread(store, agent.id, "idle");
     }
     const excerpt = lastAssistantExcerpt(timeline);
+    if (excerpt) store.tasks.setTaskThreadsLastMessage(agent.id, excerpt);
     for (const stop of silent) {
       await reportSilentStop(paseo, store, stop, excerpt, outcome.kind === "failed");
     }

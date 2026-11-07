@@ -54,7 +54,7 @@ export interface Task {
   // Paseo project of the session that proposed it from an unlinked folder.
   sourceBbProjectId: string | null;
   // Set while an agent on the open task waits for approval or has failed.
-  attention: "waiting" | "failed" | null;
+  attention: "waiting" | "failed" | "stopped" | null;
   // Most urgent state across attached agent threads; null without threads.
   agentStatus: "waiting" | "failed" | "working" | "idle" | "completed" | null;
   // Latest agent comment (first 300 characters) and when the agent last spoke.

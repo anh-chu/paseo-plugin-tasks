@@ -286,6 +286,7 @@ function TasksBoardAndListShell({
       return (
         [
           "in_progress",
+          "on_hold",
           "in_review",
           "todo",
           "backlog",
@@ -308,6 +309,7 @@ function TasksBoardAndListShell({
       [
         { key: "waiting", status: "in_progress", label: "Waiting for approval" },
         { key: "failed", status: "canceled", label: "Agent failed" },
+        { key: "stopped", status: "in_progress", label: "Stopped" },
         { key: "review", status: "in_review", label: "In review" },
         { key: "idea", status: "backlog", label: "Ideas" },
       ] as const

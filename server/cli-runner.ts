@@ -265,7 +265,7 @@ Commands:
   comment <key-or-id>                 Add a Markdown comment (--body or --body-file, optional --notify)
   attachment add|get|list|remove      Manage task or comment file attachments
   preset list|show|create|update|delete Manage reusable agent execution presets (--check-in "<cron>", off clears)
-  delegate <key>                      Start and attach a new Paseo agent using --preset
+  delegate <key>                      Start and attach a new Paseo agent using --preset (--session <id> hands it to an existing session)
   attach <key-or-id>                  Attach an agent session (--thread or $PASEO_AGENT_ID) to a task
   detach <key-or-id>                  Detach an agent session from a task
   threads <key>                       List agent sessions attached to a task
@@ -770,7 +770,7 @@ export async function runTasksCli(
       const openTasks = project
         ? domain.listTasks({
             projectId: project.id,
-            statuses: ["backlog", "todo", "in_progress", "in_review"],
+            statuses: ["backlog", "todo", "in_progress", "on_hold", "in_review"],
             limit: 20,
           }).tasks
         : [];
@@ -1637,6 +1637,7 @@ export async function runTasksCli(
           "instructions",
           "extra-instructions",
         ),
+        threadId: getFlag(parsed, "session"),
       });
       return {
         exitCode: 0,

@@ -21,6 +21,8 @@ export function statusIconName(status: TaskStatus): string {
       return "Circle";
     case "in_progress":
       return "Clock";
+    case "on_hold":
+      return "PauseCircle";
     case "in_review":
       return "Eye";
     case "done":
@@ -38,6 +40,8 @@ export function statusColor(status: TaskStatus, theme: PluginTheme): string {
       return theme.colors.foreground;
     case "in_progress":
       return "#f59e0b";
+    case "on_hold":
+      return theme.colors.foregroundMuted;
     case "in_review":
       return "#3b82f6";
     case "done":

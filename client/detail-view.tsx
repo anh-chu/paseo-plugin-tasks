@@ -182,6 +182,8 @@ export function TaskDetailView({
 
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [extraInstructions, setExtraInstructions] = useState("");
+  // null: start a new agent; otherwise hand the preset to this attached session.
+  const [delegateTarget, setDelegateTarget] = useState<string | null>(null);
   const [delegating, setDelegating] = useState(false);
 
   const [showAttachAgent, setShowAttachAgent] = useState(false);
@@ -280,6 +282,9 @@ export function TaskDetailView({
   const comments = commentsQuery.data?.comments ?? [];
   const attachments = attachmentsQuery.data ?? [];
   const taskThreads = threadsQuery.data?.taskThreads ?? [];
+  const liveSessions = taskThreads
+    .filter((tt) => tt.liveStatus !== "completed" && tt.liveStatus !== "failed")
+    .map((tt) => ({ threadId: tt.threadId as string | null, title: tt.title }));
   const pullRequests = pullRequestsQuery.data?.pullRequests ?? [];
 
   const latestAgentComment = [...comments]
@@ -390,7 +395,9 @@ export function TaskDetailView({
         ...(extraInstructions.trim()
           ? { extraInstructions: extraInstructions.trim() }
           : {}),
+        ...(delegateTarget ? { threadId: delegateTarget } : {}),
       });
+      setDelegateTarget(null);
       setExtraInstructions("");
       invalidateAll();
       toast.show(`Dispatched ${task.key} to agent`, { variant: "success" });
@@ -1024,6 +1031,35 @@ export function TaskDetailView({
           })}
         </View>
 
+        {liveSessions.length > 0 ? (
+          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+            <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>Send to</Text>
+            {[{ threadId: null as string | null, title: "New agent" }, ...liveSessions].map((target) => {
+              const active = target.threadId === delegateTarget;
+              return (
+                <Pressable
+                  key={target.threadId ?? "new"}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  onPress={() => setDelegateTarget(target.threadId)}
+                  style={{
+                    paddingHorizontal: 9,
+                    paddingVertical: 5,
+                    borderRadius: 7,
+                    borderWidth: 1,
+                    borderColor: active ? theme.colors.foreground : theme.colors.border,
+                    backgroundColor: active ? theme.colors.surface2 : "transparent",
+                  }}
+                >
+                  <Text numberOfLines={1} style={{ color: theme.colors.foreground, fontSize: 11, maxWidth: 220 }}>
+                    {target.title}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
+
         <TextInput
           value={extraInstructions}
           onChangeText={setExtraInstructions}
@@ -1062,7 +1098,9 @@ export function TaskDetailView({
               fontWeight: "700",
             }}
           >
-            {delegating ? "Dispatching Worker Agent…" : "Dispatch Worker Agent"}
+            {delegateTarget
+              ? delegating ? "Handing over…" : "Hand to this session"
+              : delegating ? "Dispatching Worker Agent…" : "Dispatch Worker Agent"}
           </Text>
         </Pressable>
       </View>
@@ -2063,6 +2101,7 @@ function WaitingOnYou({
           key={`${request.threadId}:${request.requestId}`}
           theme={theme}
           request={request}
+          taskId={taskId}
           openAgent={openAgent}
           openWorkspace={openWorkspace}
           onDone={() => void queryClient.invalidateQueries({ queryKey: ["tasks"] })}
@@ -2075,12 +2114,14 @@ function WaitingOnYou({
 function WaitingRequestBlock({
   theme,
   request,
+  taskId,
   openAgent,
   openWorkspace,
   onDone,
 }: {
   theme: PluginTheme;
   request: WaitingRequest;
+  taskId: string;
   openAgent?: (input: { readonly agentId: string }) => void;
   openWorkspace?: (input: { readonly workspaceId: string }) => void;
   onDone: () => void;
@@ -2091,6 +2132,8 @@ function WaitingRequestBlock({
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
   const isQuestion = request.questions.length > 0;
+  const isStopped = request.kind === "stopped";
+  const updateTask = useRpc(updateTaskRpc);
   const trimmed = comment.trim();
   const canSend = isQuestion && request.questions.every((q) => (picked[q.header]?.length ?? 0) > 0 || trimmed);
 
@@ -2116,6 +2159,21 @@ function WaitingRequestBlock({
       });
       if (result.alreadyAnswered) toast.show("Already answered", { variant: "info" });
       else if (!result.ok) throw new Error(result.error ?? "Could not send the answer");
+      onDone();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Waiting on someone else is not stopped: On Hold takes it out of Needs you.
+  async function putOnHold() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await updateTask({ taskId, status: "on_hold", authorName: "You" });
+      if (!result.ok) throw new Error(result.error.message);
       onDone();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -2171,7 +2229,16 @@ function WaitingRequestBlock({
         ) : null}
       </View>
 
-      {isQuestion ? (
+      {isStopped ? (
+        <View style={{ gap: 4 }}>
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>
+            Stopped {formatRelativeTime(request.title)}. Nothing has moved since. Last message:
+          </Text>
+          <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>
+            {request.description || "No message."}
+          </Text>
+        </View>
+      ) : isQuestion ? (
         request.questions.map((q) => (
           <View key={q.header} style={{ gap: 6 }}>
             <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>{q.question}</Text>
@@ -2214,7 +2281,7 @@ function WaitingRequestBlock({
         value={comment}
         onChangeText={setComment}
         multiline
-        placeholder="Comment"
+        placeholder={isStopped ? "Reply to the agent" : "Comment"}
         placeholderTextColor={theme.colors.foregroundMuted}
         style={{
           minHeight: 36,
@@ -2229,7 +2296,16 @@ function WaitingRequestBlock({
       />
 
       <View style={{ flexDirection: "row", gap: 8, justifyContent: "flex-end" }}>
-        {isQuestion ? (
+        {isStopped ? (
+          <>
+            <Pressable accessibilityRole="button" disabled={busy} onPress={() => void putOnHold()} style={button(false)}>
+              <Text style={buttonText(false)}>Put on hold</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" disabled={!trimmed || busy} onPress={() => void send({})} style={{ ...button(true), opacity: trimmed && !busy ? 1 : 0.5 }}>
+              <Text style={buttonText(true)}>Send</Text>
+            </Pressable>
+          </>
+        ) : isQuestion ? (
           <Pressable accessibilityRole="button" disabled={!canSend || busy} onPress={sendAnswers} style={{ ...button(true), opacity: canSend && !busy ? 1 : 0.5 }}>
             <Text style={buttonText(true)}>Send</Text>
           </Pressable>

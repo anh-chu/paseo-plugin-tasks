@@ -241,6 +241,15 @@ const MIGRATIONS = [
   `
     ALTER TABLE tasks ADD COLUMN source_bb_project_id TEXT;
   `,
+  `
+    ALTER TABLE task_threads ADD COLUMN last_message TEXT;
+    ALTER TABLE tasks ADD COLUMN stopped_since TEXT;
+    CREATE TABLE agent_parents (
+      agent_id TEXT PRIMARY KEY,
+      parent_id TEXT NOT NULL
+    );
+    CREATE INDEX idx_agent_parents_parent ON agent_parents(parent_id);
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {
@@ -271,4 +280,38 @@ export function initializeTasksSchema(db: PluginDatabase): void {
   });
 
   migrate();
+  allowOnHoldStatus(db);
+}
+
+const OLD_STATUSES = "'in_progress', 'in_review'";
+const NEW_STATUSES = "'in_progress', 'on_hold', 'in_review'";
+
+// SQLite cannot change a CHECK constraint in place, so adding the on_hold
+// status rebuilds the tasks table (SQLite's documented 12-step procedure).
+// Foreign keys stay off while the old table is dropped, so rows in other
+// tables that point at tasks are kept, not cascaded away.
+function allowOnHoldStatus(db: PluginDatabase): void {
+  const table = db
+    .prepare<[], { sql: string }>("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'tasks'")
+    .get();
+  if (!table || !table.sql.includes(OLD_STATUSES)) return;
+  const dependents = db
+    .prepare<[], { sql: string }>(
+      "SELECT sql FROM sqlite_schema WHERE tbl_name = 'tasks' AND type IN ('index', 'trigger') AND sql IS NOT NULL",
+    )
+    .all();
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(table.sql.replace(OLD_STATUSES, NEW_STATUSES).replace(/^CREATE TABLE "?tasks"?/, "CREATE TABLE tasks_new"));
+      db.exec("INSERT INTO tasks_new SELECT * FROM tasks");
+      db.exec("DROP TABLE tasks");
+      db.exec("ALTER TABLE tasks_new RENAME TO tasks");
+      for (const { sql } of dependents) db.exec(sql);
+      const broken = db.prepare<[], unknown>("PRAGMA foreign_key_check").all();
+      if (broken.length > 0) throw new Error(`on_hold migration left ${broken.length} broken foreign keys`);
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
 }

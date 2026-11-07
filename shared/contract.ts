@@ -82,7 +82,7 @@ export const taskSchema = z
     stage: z.string().nullable().default(null),
     idea: z.boolean().default(false),
     sourceBbProjectId: z.string().nullable().default(null),
-    attention: z.enum(["waiting", "failed"]).nullable().default(null),
+    attention: z.enum(["waiting", "failed", "stopped"]).nullable().default(null),
     agentStatus: z
       .enum(["waiting", "failed", "working", "idle", "completed"])
       .nullable()
@@ -719,6 +719,7 @@ export const delegateTaskRpc = defineRpc({
       taskId: idSchema,
       presetId: idSchema,
       extraInstructions: z.string().optional(),
+      threadId: nonBlankStringSchema.optional(),
     })
     .strict(),
   output: z

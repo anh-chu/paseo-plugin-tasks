@@ -65,6 +65,7 @@ import {
   reconcileOnFirstCapture,
   registerLifecycleHooks,
   seedDemoData,
+  sweepStoppedTasks,
 } from "./server/domain";
 
 export default function contribute(server: PluginServerContext) {
@@ -193,6 +194,14 @@ export default function contribute(server: PluginServerContext) {
       },
     };
   });
+
+  // Once a minute, flag in-progress tasks whose agents have all gone quiet.
+  const stoppedSweep = setInterval(() => {
+    if (!latestPaseo) return;
+    sweepStoppedTasks(store, latestPaseo).catch((error) =>
+      console.error("Tasks: stopped-task check failed:", error),
+    );
+  }, 60_000);
 
   registerLifecycleHooks(server, store, capturePaseo, async () => {
     const current = await settings.read();
@@ -419,6 +428,7 @@ export default function contribute(server: PluginServerContext) {
   });
 
   return async () => {
+    clearInterval(stoppedSweep);
     const activeBridge = bridge ?? (await bridgeReady);
     await activeBridge?.close();
     await bridgeConnecting?.catch(() => {});
