@@ -63,6 +63,7 @@ export const projectSchema = z
     folderId: idSchema.nullable(),
     linkedBbProjectId: nonBlankStringSchema.nullable(),
     stages: z.array(z.string()).default([]),
+    autoStartPresetId: idSchema.nullable().default(null),
     createdAt: z.string(),
   })
   .strict();
@@ -284,6 +285,7 @@ export const updateProjectInputSchema = z
     folderId: idSchema.nullable().optional(),
     linkedBbProjectId: nonBlankStringSchema.nullable().optional(),
     stages: z.array(z.string()).optional(),
+    autoStartPresetId: idSchema.nullable().optional(),
   })
   .strict()
   .refine(
@@ -292,7 +294,8 @@ export const updateProjectInputSchema = z
       input.color !== undefined ||
       input.folderId !== undefined ||
       input.linkedBbProjectId !== undefined ||
-      input.stages !== undefined,
+      input.stages !== undefined ||
+      input.autoStartPresetId !== undefined,
     { message: "at least one project field must be updated" },
   );
 

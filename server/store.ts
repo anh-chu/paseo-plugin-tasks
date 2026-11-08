@@ -72,6 +72,7 @@ interface ProjectRow {
   folder_id: string | null;
   linked_bb_project_id: string | null;
   stages: string | null;
+  auto_start_preset_id: string | null;
   created_at: string;
 }
 
@@ -382,6 +383,7 @@ function projectFromRow(row: ProjectRow): Project {
     folderId: row.folder_id,
     linkedBbProjectId: row.linked_bb_project_id,
     stages: row.stages ? (JSON.parse(row.stages) as string[]) : [],
+    autoStartPresetId: row.auto_start_preset_id ?? null,
     createdAt: row.created_at,
   };
 }
@@ -807,13 +809,14 @@ export function createTasksStore(db: PluginDatabase) {
         string | null,
         string | null,
         string | null,
+        string | null,
         string,
       ]
     >(
       `
       UPDATE projects
       SET name = ?, prefix = ?, color = ?, folder_id = ?, linked_bb_project_id = ?,
-        stages = ?
+        stages = ?, auto_start_preset_id = ?
       WHERE id = ?
     `,
     ).run(
@@ -831,6 +834,7 @@ export function createTasksStore(db: PluginDatabase) {
         ? current.linkedBbProjectId
         : validateLinkedProjectId(input.linkedBbProjectId),
       validateStages(input.stages ?? current.stages),
+      input.autoStartPresetId === undefined ? current.autoStartPresetId : input.autoStartPresetId,
       id,
     );
     return requireProject(id);
@@ -1279,6 +1283,7 @@ export function createTasksStore(db: PluginDatabase) {
           number,
           string,
           Task["status"],
+          Task["status"],
           string,
         ]
       >(
@@ -1286,7 +1291,8 @@ export function createTasksStore(db: PluginDatabase) {
         UPDATE tasks SET
           title = ?, description = ?, status = ?, priority = ?, due_date = ?,
           parent_task_id = ?, stage = ?, idea = ?, position = ?, updated_at = ?,
-          stopped_since = CASE WHEN status = ? THEN stopped_since ELSE NULL END
+          stopped_since = CASE WHEN status = ? THEN stopped_since ELSE NULL END,
+          nudged_at = CASE WHEN status = ? THEN nudged_at ELSE NULL END
         WHERE id = ?
       `,
       ).run(
@@ -1304,6 +1310,7 @@ export function createTasksStore(db: PluginDatabase) {
         (input.idea ?? current.idea) ? 1 : 0,
         position,
         nowIso(),
+        status,
         status,
         id,
       );
@@ -1500,13 +1507,14 @@ export function createTasksStore(db: PluginDatabase) {
             .get(task.projectId, input.status, id)?.position ?? POSITION_STEP;
       }
 
-      db.prepare<[Task["status"], number, string, Task["status"], string]>(
+      db.prepare<[Task["status"], number, string, Task["status"], Task["status"], string]>(
         `
         UPDATE tasks SET status = ?, position = ?, updated_at = ?,
-          stopped_since = CASE WHEN status = ? THEN stopped_since ELSE NULL END
+          stopped_since = CASE WHEN status = ? THEN stopped_since ELSE NULL END,
+          nudged_at = CASE WHEN status = ? THEN nudged_at ELSE NULL END
         WHERE id = ?
       `,
-      ).run(input.status, position, nowIso(), input.status, id);
+      ).run(input.status, position, nowIso(), input.status, input.status, id);
       return requireTask(id);
     },
   );
@@ -1982,6 +1990,16 @@ export function createTasksStore(db: PluginDatabase) {
     db.prepare<[string | null, string]>("UPDATE tasks SET stopped_since = ? WHERE id = ?").run(since, taskId);
   }
 
+  function getTaskNudgedAt(taskId: string): string | null {
+    return db
+      .prepare<[string], { nudged_at: string | null }>("SELECT nudged_at FROM tasks WHERE id = ?")
+      .get(taskId)?.nudged_at ?? null;
+  }
+
+  function setTaskNudgedAt(taskId: string, at: string): void {
+    db.prepare<[string, string]>("UPDATE tasks SET nudged_at = ? WHERE id = ?").run(at, taskId);
+  }
+
   function getTaskStoppedSince(taskId: string): string | null {
     return db
       .prepare<[string], { stopped_since: string | null }>("SELECT stopped_since FROM tasks WHERE id = ?")
@@ -2281,6 +2299,8 @@ export function createTasksStore(db: PluginDatabase) {
     listStoppableTasks,
     setTaskStoppedSince,
     getTaskStoppedSince,
+    getTaskNudgedAt,
+    setTaskNudgedAt,
     takeTaskThreadTurnStartedAt,
     lastSilentStopAt,
     getTaskThreadHeartbeatId,

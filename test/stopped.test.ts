@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createApiStore, createDomainHandlers, STOPPED_AFTER_MS, stoppedSince, sweepStoppedTasks } from "../server/domain";
+import { createApiStore, createDomainHandlers, NUDGE_MESSAGE, STOPPED_AFTER_MS, stoppedSince, sweepStoppedTasks } from "../server/domain";
 import { openTasksDatabase } from "../server/sqlite";
 
 const now = Date.parse("2026-11-07T12:00:00.000Z");
@@ -62,13 +62,22 @@ describe("stopped tasks and On Hold", () => {
     return created.task;
   }
 
+  const sent: string[] = [];
   const paseo = (status: string) => ({
-    agents: { list: async () => ({ entries: [{ agent: { id: "mgr", ...agent(status, ago(STOPPED_AFTER_MS * 2)) } }] }) },
+    agents: {
+      list: async () => ({ entries: [{ agent: { id: "mgr", ...agent(status, ago(STOPPED_AFTER_MS * 2)) } }] }),
+      ref: (id: string) => ({ send: async (text: string) => void sent.push(`${id}: ${text}`) }),
+    },
   });
 
-  it("puts a stopped task in Needs you and clears it when work resumes", async () => {
+  it("nudges the agent once, then puts a still-quiet task in Needs you, and clears it when work resumes", async () => {
     const task = taskWithAgent("in_progress");
+    sent.length = 0;
     await sweepStoppedTasks(store, paseo("idle") as never, now);
+    expect(sent).toEqual([`mgr: ${NUDGE_MESSAGE}`]);
+    expect(store.tasks.getTask(task.id)?.attention).toBeNull();
+    await sweepStoppedTasks(store, paseo("idle") as never, now);
+    expect(sent).toHaveLength(1);
     expect(store.tasks.getTask(task.id)?.attention).toBe("stopped");
     expect(store.tasks.listTasks({ needsYou: true } as never).map((t) => t.id)).toContain(task.id);
     await sweepStoppedTasks(store, paseo("running") as never, now);
@@ -82,11 +91,13 @@ describe("stopped tasks and On Hold", () => {
     expect(store.tasks.getTask(task.id)?.attention).toBeNull();
   });
 
-  it("clears Stopped when the status changes", async () => {
+  it("clears Stopped and the nudge when the status changes", async () => {
     const task = taskWithAgent("in_progress");
+    await sweepStoppedTasks(store, paseo("idle") as never, now);
     await sweepStoppedTasks(store, paseo("idle") as never, now);
     store.tasks.updateTask(task.id, { status: "on_hold" });
     store.tasks.updateTask(task.id, { status: "in_progress" });
     expect(store.tasks.getTask(task.id)?.attention).toBeNull();
+    expect(store.tasks.getTaskNudgedAt(task.id)).toBeNull();
   });
 });

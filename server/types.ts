@@ -34,6 +34,8 @@ export interface Project {
   folderId: string | null;
   linkedBbProjectId: string | null;
   stages: string[];
+  // Moving a task into Todo delegates it with this preset; null turns it off.
+  autoStartPresetId: string | null;
   createdAt: string;
 }
 
@@ -162,6 +164,7 @@ export interface UpdateProjectInput {
   folderId?: string | null;
   linkedBbProjectId?: string | null;
   stages?: readonly string[];
+  autoStartPresetId?: string | null;
 }
 
 export interface CreateTaskInput {

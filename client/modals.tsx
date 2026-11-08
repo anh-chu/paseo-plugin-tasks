@@ -600,6 +600,16 @@ export function ManageModal({
     }
   }
 
+  async function handleAutoStart(project: Project, presetId: string | null) {
+    if (project.autoStartPresetId === presetId) return;
+    try {
+      await updateProject({ projectId: project.id, autoStartPresetId: presetId });
+      invalidateAll();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function handleSaveStages(project: Project) {
     const draft = stageDrafts[project.id];
     if (draft === undefined) return;
@@ -895,6 +905,41 @@ export function ManageModal({
                           fontSize: 12,
                         }}
                       />
+                    </View>
+
+                    <View style={{ gap: 4 }}>
+                      <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
+                        Start tasks moved to Todo with
+                      </Text>
+                      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 4 }}>
+                        {[{ id: null as string | null, name: "Nobody" }, ...presets].map((preset) => {
+                          const active = p.autoStartPresetId === preset.id;
+                          return (
+                            <Pressable
+                              key={preset.id ?? "none"}
+                              accessibilityRole="button"
+                              accessibilityState={{ selected: active }}
+                              onPress={() => void handleAutoStart(p, preset.id)}
+                              style={{
+                                paddingHorizontal: 8,
+                                paddingVertical: 4,
+                                borderRadius: 6,
+                                backgroundColor: active ? theme.colors.accent : theme.colors.surface1,
+                              }}
+                            >
+                              <Text
+                                style={{
+                                  color: active ? theme.colors.accentForeground : theme.colors.foregroundMuted,
+                                  fontSize: 11,
+                                  fontWeight: active ? "700" : "400",
+                                }}
+                              >
+                                {preset.name}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
                     </View>
                   </View>
                 ))}

@@ -912,7 +912,7 @@ export function createDomainHandlers(
   runCli: PaseoCliRunner = runPaseoCli,
   requireEvidence: () => Promise<boolean> = async () => false,
 ) {
-  return {
+  const handlers = {
     requireEvidence,
     createFolder(input: { name: string; parentFolderId?: string | null }) {
       const folder = store.tasks.createFolder(input);
@@ -1062,6 +1062,7 @@ export function createDomainHandlers(
           replaceTaskLabels(store, created.id, input.labelIds ?? []);
           return apiTask(store, created);
         });
+        autoStartIfTodo(task.id, null);
         return { ok: true as const, task };
       } catch (error) {
         if (error instanceof TasksDomainFailure) return taskFailure(error);
@@ -1168,6 +1169,8 @@ export function createDomainHandlers(
             store.tasks.listTaskThreads(current.id),
           );
         }
+        // Accepting an idea counts as entering its status.
+        autoStartIfTodo(result.id, current.idea ? null : current.status);
 
         return { ok: true as const, task: result };
       } catch (error) {
@@ -1252,6 +1255,7 @@ export function createDomainHandlers(
           store.tasks.listTaskThreads(current.id),
         );
       }
+      autoStartIfTodo(task.id, current.status);
       return { ok: true as const, task };
     },
     moveTaskToProject(input: {
@@ -2122,6 +2126,27 @@ export function createDomainHandlers(
       };
     },
   };
+
+  // Todo means go: a task that enters Todo in a project with an auto-start
+  // preset is delegated with it, once, unless an agent already works on it.
+  function autoStartIfTodo(taskId: string, previousStatus: TaskStatus | null): void {
+    const task = store.tasks.getTask(taskId);
+    if (!task || task.status !== "todo" || previousStatus === "todo" || task.idea) return;
+    const presetId = store.tasks.getProject(task.projectId)?.autoStartPresetId;
+    if (!presetId || !store.tasks.getPreset(presetId)) return;
+    const live = store.tasks.listTaskThreads(taskId).some((t) => t.liveStatus !== "completed" && t.liveStatus !== "failed");
+    if (live) return;
+    handlers.delegate({ taskId, presetId }).catch((error: unknown) => {
+      store.tasks.createComment({
+        taskId,
+        kind: "system",
+        authorName: SYSTEM_AUTHOR_NAME,
+        body: `Auto-start did not run: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    });
+  }
+
+  return handlers;
 }
 
 export type TasksDomain = ReturnType<typeof createDomainHandlers>;
@@ -2589,6 +2614,30 @@ export function stoppedSince(
   return new Date(last).toISOString();
 }
 
+export const NUDGE_MESSAGE =
+  "Tasks: this task has had no activity for 10 minutes. If the work is done or blocked, report it now, or ask the user with your question tool. Otherwise continue the work.";
+
+async function nudgeAgents(store: TasksApiStore, paseo: PaseoApi, taskId: string, agentIds: string[], now: number): Promise<void> {
+  store.tasks.setTaskNudgedAt(taskId, new Date(now).toISOString());
+  const reached: string[] = [];
+  for (const id of agentIds) {
+    try {
+      await paseo.agents.ref(id).send(NUDGE_MESSAGE);
+      reached.push(id);
+    } catch {
+      // A closed session cannot be nudged; Stopped follows after the next quiet spell.
+    }
+  }
+  store.tasks.createComment({
+    taskId,
+    kind: "system",
+    authorName: SYSTEM_AUTHOR_NAME,
+    body: reached.length > 0
+      ? `No activity for 10 minutes: nudged the agent once. If nothing moves, this task goes to Needs you as Stopped.`
+      : `No activity for 10 minutes, and no agent could be nudged.`,
+  });
+}
+
 export async function sweepStoppedTasks(store: TasksApiStore, paseo: PaseoApi, now = Date.now()): Promise<void> {
   const candidates = store.tasks.listStoppableTasks();
   if (candidates.length === 0) return;
@@ -2597,6 +2646,12 @@ export async function sweepStoppedTasks(store: TasksApiStore, paseo: PaseoApi, n
   for (const task of candidates) {
     const children = task.threads.flatMap((t) => store.tasks.listChildAgentIds(t.threadId));
     const since = stoppedSince(task.threads, children, live, now);
+    if (since !== null && task.stoppedSince === null && !store.tasks.getTaskNudgedAt(task.taskId)) {
+      // Nudge once before bothering the user: the first quiet spell in a
+      // status gets one message to the task's agents; the next one is Stopped.
+      await nudgeAgents(store, paseo, task.taskId, task.threads.map((t) => t.threadId).filter((id) => live.has(id)), now);
+      continue;
+    }
     if ((since === null) !== (task.stoppedSince === null)) store.tasks.setTaskStoppedSince(task.taskId, since);
   }
 }

@@ -250,6 +250,10 @@ const MIGRATIONS = [
     );
     CREATE INDEX idx_agent_parents_parent ON agent_parents(parent_id);
   `,
+  `
+    ALTER TABLE projects ADD COLUMN auto_start_preset_id TEXT;
+    ALTER TABLE tasks ADD COLUMN nudged_at TEXT;
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {
