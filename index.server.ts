@@ -37,6 +37,7 @@ import {
   listTaskPullRequestsRpc,
   listWaitingRpc,
   answerWaitingRpc,
+  playbookStagesRpc,
   listTasksRpc,
   listTaskThreadsRpc,
   moveFolderRpc,
@@ -349,6 +350,11 @@ export default function contribute(server: PluginServerContext) {
     capturePaseo(paseo);
     return domain.listTaskThreads(input);
   });
+  server.handle(playbookStagesRpc, (input, { paseo }) => {
+    capturePaseo(paseo);
+    return domain.playbookStages(input);
+  });
+
   server.handle(listWaitingRpc, (input, { paseo }) => {
     capturePaseo(paseo);
     return domain.listWaiting(input, paseo);

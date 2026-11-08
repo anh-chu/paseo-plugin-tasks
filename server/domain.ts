@@ -21,9 +21,11 @@ import type {
   SidebarProjectSummary,
   Task as ApiTask,
   TaskPullRequest,
+  PlaybookStage,
   TasksDomainError,
   WaitingRequest,
 } from "../shared/contract";
+import { findPlaybookStage, readPlaybookRuns } from "./playbook-runs";
 import {
   AttachmentReferencedError,
   deleteAttachmentById,
@@ -1534,6 +1536,19 @@ export function createDomainHandlers(
         ),
         unavailableThreadIds: unavailable,
       };
+    },
+    playbookStages(input: { taskIds: string[] }): { stages: Record<string, PlaybookStage> } {
+      const runs = readPlaybookRuns();
+      if (runs.length === 0) return { stages: {} };
+      const stages: Record<string, PlaybookStage> = {};
+      for (const taskId of input.taskIds) {
+        const task = store.tasks.getTask(taskId);
+        if (!task) continue;
+        const threadIds = store.tasks.listTaskThreads(taskId).map((t) => t.threadId);
+        const stage = findPlaybookStage(runs, { key: task.key, threadIds });
+        if (stage) stages[taskId] = stage;
+      }
+      return { stages };
     },
     async listWaiting(
       input: { taskId: string },

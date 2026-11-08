@@ -38,6 +38,7 @@ import {
   listTasksRpc,
   listWaitingRpc,
   answerWaitingRpc,
+  playbookStagesRpc,
   listTaskThreadsRpc,
   moveTaskToProjectRpc,
   searchThreadsRpc,
@@ -56,6 +57,7 @@ import {
   ProjectDot,
   StatusBadge,
   StatusIcon,
+  PlaybookStageLine,
   ThreadLiveStatusBadge,
 } from "./badges";
 import { MenuButton } from "./menu";
@@ -637,6 +639,8 @@ export function TaskDetailView({
         openAgent={openAgent}
         openWorkspace={openWorkspace}
       />
+
+      <PlaybookProgress theme={theme} taskId={task.id} openWorkspace={openWorkspace} />
 
       {/* Title & Description */}
       {editingHeader ? (
@@ -2332,6 +2336,38 @@ function WaitingRequestBlock({
           </>
         )}
       </View>
+    </View>
+  );
+}
+
+// The task's Playbooks run, read from Playbooks: its stage, and the graph one
+// tap away. Nothing shows without a run.
+function PlaybookProgress({
+  theme,
+  taskId,
+  openWorkspace,
+}: {
+  theme: PluginTheme;
+  taskId: string;
+  openWorkspace?: (input: { readonly workspaceId: string }) => void;
+}) {
+  const playbookStages = useRpc(playbookStagesRpc);
+  const stageQuery = useQuery({
+    queryKey: ["tasks", "playbookStages", taskId],
+    queryFn: () => playbookStages({ taskIds: [taskId] }),
+    refetchInterval: 5000,
+  });
+  const stage = stageQuery.data?.stages[taskId];
+  if (!stage) return null;
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+      <Text style={{ color: theme.colors.foreground, fontSize: 12, fontWeight: "500" }}>{stage.playbookTitle}</Text>
+      <PlaybookStageLine stage={stage} theme={theme} />
+      {openWorkspace && stage.workspaceId ? (
+        <Pressable accessibilityRole="link" onPress={() => openWorkspace({ workspaceId: stage.workspaceId! })}>
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>View progress</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }

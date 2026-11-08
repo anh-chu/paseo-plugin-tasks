@@ -794,6 +794,29 @@ export const answerWaitingRpc = defineRpc({
     .strict(),
 });
 
+// The stage of each task's Playbooks run, for tasks that have one. Empty when
+// Paseo Playbooks is not installed.
+export const playbookStageSchema = z
+  .object({
+    runId: z.string(),
+    playbookTitle: z.string(),
+    status: z.string(),
+    step: z.string().nullable(),
+    waiting: z.boolean(),
+    done: z.number(),
+    total: z.number(),
+    workspaceId: z.string().nullable(),
+  })
+  .strict();
+
+export type PlaybookStage = z.infer<typeof playbookStageSchema>;
+
+export const playbookStagesRpc = defineRpc({
+  name: "tasks.playbook_stages",
+  input: z.object({ taskIds: z.array(idSchema).max(500) }).strict(),
+  output: z.object({ stages: z.record(z.string(), playbookStageSchema) }).strict(),
+});
+
 export const detachTaskThreadRpc = defineRpc({
   name: "tasks.task_threads_detach",
   input: z
