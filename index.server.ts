@@ -35,6 +35,9 @@ import {
   listProjectsRpc,
   listProviderCatalogRpc,
   listTaskPullRequestsRpc,
+  listWaitingRpc,
+  answerWaitingRpc,
+  playbookStagesRpc,
   listTasksRpc,
   listTaskThreadsRpc,
   moveFolderRpc,
@@ -63,6 +66,7 @@ import {
   reconcileOnFirstCapture,
   registerLifecycleHooks,
   seedDemoData,
+  sweepStoppedTasks,
 } from "./server/domain";
 
 export default function contribute(server: PluginServerContext) {
@@ -191,6 +195,14 @@ export default function contribute(server: PluginServerContext) {
       },
     };
   });
+
+  // Once a minute, flag in-progress tasks whose agents have all gone quiet.
+  const stoppedSweep = setInterval(() => {
+    if (!latestPaseo) return;
+    sweepStoppedTasks(store, latestPaseo).catch((error) =>
+      console.error("Tasks: stopped-task check failed:", error),
+    );
+  }, 60_000);
 
   registerLifecycleHooks(server, store, capturePaseo, async () => {
     const current = await settings.read();
@@ -338,6 +350,21 @@ export default function contribute(server: PluginServerContext) {
     capturePaseo(paseo);
     return domain.listTaskThreads(input);
   });
+  server.handle(playbookStagesRpc, (input, { paseo }) => {
+    capturePaseo(paseo);
+    return domain.playbookStages(input);
+  });
+
+  server.handle(listWaitingRpc, (input, { paseo }) => {
+    capturePaseo(paseo);
+    return domain.listWaiting(input, paseo);
+  });
+
+  server.handle(answerWaitingRpc, (input, { paseo }) => {
+    capturePaseo(paseo);
+    return domain.answerWaiting(input, paseo);
+  });
+
   server.handle(listTaskPullRequestsRpc, (input, { paseo }) => {
     capturePaseo(paseo);
     return domain.listTaskPullRequests(input, paseo);
@@ -407,6 +434,7 @@ export default function contribute(server: PluginServerContext) {
   });
 
   return async () => {
+    clearInterval(stoppedSweep);
     const activeBridge = bridge ?? (await bridgeReady);
     await activeBridge?.close();
     await bridgeConnecting?.catch(() => {});

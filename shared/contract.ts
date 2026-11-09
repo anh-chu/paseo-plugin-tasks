@@ -63,6 +63,7 @@ export const projectSchema = z
     folderId: idSchema.nullable(),
     linkedBbProjectId: nonBlankStringSchema.nullable(),
     stages: z.array(z.string()).default([]),
+    autoStartPresetId: idSchema.nullable().default(null),
     createdAt: z.string(),
   })
   .strict();
@@ -82,7 +83,7 @@ export const taskSchema = z
     stage: z.string().nullable().default(null),
     idea: z.boolean().default(false),
     sourceBbProjectId: z.string().nullable().default(null),
-    attention: z.enum(["waiting", "failed"]).nullable().default(null),
+    attention: z.enum(["waiting", "failed", "stopped"]).nullable().default(null),
     agentStatus: z
       .enum(["waiting", "failed", "working", "idle", "completed"])
       .nullable()
@@ -284,6 +285,7 @@ export const updateProjectInputSchema = z
     folderId: idSchema.nullable().optional(),
     linkedBbProjectId: nonBlankStringSchema.nullable().optional(),
     stages: z.array(z.string()).optional(),
+    autoStartPresetId: idSchema.nullable().optional(),
   })
   .strict()
   .refine(
@@ -292,7 +294,8 @@ export const updateProjectInputSchema = z
       input.color !== undefined ||
       input.folderId !== undefined ||
       input.linkedBbProjectId !== undefined ||
-      input.stages !== undefined,
+      input.stages !== undefined ||
+      input.autoStartPresetId !== undefined,
     { message: "at least one project field must be updated" },
   );
 
@@ -719,6 +722,7 @@ export const delegateTaskRpc = defineRpc({
       taskId: idSchema,
       presetId: idSchema,
       extraInstructions: z.string().optional(),
+      threadId: nonBlankStringSchema.optional(),
     })
     .strict(),
   output: z
@@ -738,6 +742,82 @@ export const attachTaskThreadRpc = defineRpc({
     })
     .strict(),
   output: z.object({ threadId: z.string() }).strict(),
+});
+
+// What an attached agent is waiting on the user for: a question to answer or a
+// permission to allow or deny. Read live from the agent, not stored.
+export const waitingQuestionSchema = z
+  .object({
+    header: z.string(),
+    question: z.string(),
+    multiSelect: z.boolean(),
+    options: z.array(z.object({ label: z.string(), description: z.string() }).strict()),
+  })
+  .strict();
+
+export const waitingRequestSchema = z
+  .object({
+    threadId: z.string(),
+    threadTitle: z.string(),
+    workspaceId: z.string().nullable(),
+    requestId: z.string(),
+    kind: z.string(),
+    title: z.string(),
+    description: z.string(),
+    questions: z.array(waitingQuestionSchema),
+    actions: z
+      .array(z.object({ id: z.string(), label: z.string(), behavior: z.enum(["allow", "deny"]) }).strict()),
+  })
+  .strict();
+
+export type WaitingRequest = z.infer<typeof waitingRequestSchema>;
+
+export const listWaitingRpc = defineRpc({
+  name: "tasks.list_waiting",
+  input: z.object({ taskId: idSchema }).strict(),
+  output: z.object({ requests: z.array(waitingRequestSchema) }).strict(),
+});
+
+export const answerWaitingRpc = defineRpc({
+  name: "tasks.answer_waiting",
+  input: z
+    .object({
+      threadId: nonBlankStringSchema,
+      requestId: nonBlankStringSchema,
+      // Questions: answers keyed by question header. Permissions: a behavior,
+      // with the chosen action id when the request offers actions.
+      answers: z.record(z.string(), z.string()).optional(),
+      behavior: z.enum(["allow", "deny"]).optional(),
+      actionId: z.string().optional(),
+      message: z.string().optional(),
+    })
+    .strict(),
+  output: z
+    .object({ ok: z.boolean(), alreadyAnswered: z.boolean(), error: z.string().nullable() })
+    .strict(),
+});
+
+// The stage of each task's Playbooks run, for tasks that have one. Empty when
+// Paseo Playbooks is not installed.
+export const playbookStageSchema = z
+  .object({
+    runId: z.string(),
+    playbookTitle: z.string(),
+    status: z.string(),
+    step: z.string().nullable(),
+    waiting: z.boolean(),
+    done: z.number(),
+    total: z.number(),
+    workspaceId: z.string().nullable(),
+  })
+  .strict();
+
+export type PlaybookStage = z.infer<typeof playbookStageSchema>;
+
+export const playbookStagesRpc = defineRpc({
+  name: "tasks.playbook_stages",
+  input: z.object({ taskIds: z.array(idSchema).max(500) }).strict(),
+  output: z.object({ stages: z.record(z.string(), playbookStageSchema) }).strict(),
 });
 
 export const detachTaskThreadRpc = defineRpc({

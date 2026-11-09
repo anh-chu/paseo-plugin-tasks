@@ -253,7 +253,7 @@ const HELP_TEXT = `Usage: paseo-tasks <command> [options]
 
 Commands:
   status                              Show the installed Tasks plugin name and version
-  project create|list|show|update     Manage tracker projects, prefixes, Paseo project links, and stages (--stages "A,B,C", "" turns off)
+  project create|list|show|update     Manage tracker projects, prefixes, Paseo project links, stages (--stages "A,B,C", "" turns off), and auto-start (--auto-start <preset> | off)
   folder create|list|update|delete    Organize tracker projects into folders
   create                              Create a task (--project, --title, --description, --priority, --due, --label, --parent, --attach)
   context                             Show this folder's project, this session's tasks, and open tasks to pick from
@@ -265,7 +265,7 @@ Commands:
   comment <key-or-id>                 Add a Markdown comment (--body or --body-file, optional --notify)
   attachment add|get|list|remove      Manage task or comment file attachments
   preset list|show|create|update|delete Manage reusable agent execution presets (--check-in "<cron>", off clears)
-  delegate <key>                      Start and attach a new Paseo agent using --preset
+  delegate <key>                      Start and attach a new Paseo agent using --preset (--session <id> hands it to an existing session)
   attach <key-or-id>                  Attach an agent session (--thread or $PASEO_AGENT_ID) to a task
   detach <key-or-id>                  Detach an agent session from a task
   threads <key>                       List agent sessions attached to a task
@@ -537,6 +537,9 @@ export async function runTasksCli(
               ...(project.stages.length > 0
                 ? [["Stages", project.stages.join(", ")] as const]
                 : []),
+              ...(project.autoStartPresetId
+                ? [["Auto-start", domain.listPresets().presets.find((p) => p.id === project.autoStartPresetId)?.name ?? project.autoStartPresetId] as const]
+                : []),
               ["Next task", `${project.prefix}-${project.nextTaskNumber}`],
               ["Created", project.createdAt],
             ]),
@@ -555,6 +558,11 @@ export async function runTasksCli(
       const folder = folderFlag ? resolveFolder(domain, folderFlag) : undefined;
       const renamePrefix = getFlag(parsed, "rename-prefix");
       const stages = getFlag(parsed, "stages");
+      const autoStart = getFlag(parsed, "auto-start");
+      const autoStartPresetId =
+        autoStart === undefined ? undefined
+        : autoStart === "off" ? null
+        : resolvePreset(domain.listPresets().presets, autoStart).id;
       if (
         renamePrefix &&
         store.projectPrefixExists(renamePrefix.trim().toUpperCase(), project.id)
@@ -583,6 +591,7 @@ export async function runTasksCli(
                   "paseo-project",
                 ),
           stages: stages === undefined ? undefined : stages.split(","),
+          autoStartPresetId,
         }),
       );
       return {
@@ -770,7 +779,7 @@ export async function runTasksCli(
       const openTasks = project
         ? domain.listTasks({
             projectId: project.id,
-            statuses: ["backlog", "todo", "in_progress", "in_review"],
+            statuses: ["backlog", "todo", "in_progress", "on_hold", "in_review"],
             limit: 20,
           }).tasks
         : [];
@@ -1637,6 +1646,7 @@ export async function runTasksCli(
           "instructions",
           "extra-instructions",
         ),
+        threadId: getFlag(parsed, "session"),
       });
       return {
         exitCode: 0,

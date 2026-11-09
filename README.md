@@ -46,6 +46,10 @@ A preset with a check-in gives each agent it starts a Paseo heartbeat on that sc
 
 Dispatching builds a seed prompt containing the task, its description, sub-tasks, attachments, recent comments, the preset's own instructions, and anything you type in the dispatch box. The new agent session is attached to the task automatically.
 
+**Send to** in the dispatch box lists the live sessions already attached to the task. Pick one to give it the preset's instructions as its next message instead of starting a new agent; it keeps its own context. From the CLI: `paseo-tasks delegate ABC-12 --preset "<name>" --session <agent id>`.
+
+A project can start work on its own: under **Manage → Projects**, **Start tasks moved to Todo with** picks a preset. Moving a task into Todo, or accepting an idea into Todo, then delegates it with that preset, unless an agent already works on it. From the CLI: `paseo-tasks project update ABC --auto-start "<preset>"` (`off` turns it off).
+
 Three presets ship with the plugin on first use: Codex with high thinking in a new worktree, Claude Sonnet in the default environment, and OpenCode with Gemini at high thinking. Edit them under **Agent Presets**.
 
 ## Worker report-back
@@ -108,6 +112,18 @@ This applies to sessions created after the plugin is installed; existing session
 
 When an agent finds follow-up work (a bug, a limitation, a next step), it proposes an idea with `paseo-tasks propose ABC-12 --title "..."` or `tasks_propose_idea`, rather than creating a task. The idea waits under **Needs you** and stays off the board. Open it and choose **Accept idea** to move it to the backlog, or **Dismiss** to cancel it. The task the agent was working on gets a comment that names the idea.
 
+### Waiting on you, Stopped and On Hold
+
+When an attached agent asks a question or a permission, the task view shows it at the top under **Waiting on you**: pick an option, add a comment, and Send, or Allow and Deny. The answer goes to the agent, and the task leaves Needs you.
+
+A task In Progress whose agents, and the agents they started, have shown no activity for 10 minutes gets one message asking its agent to report or continue. If it stays quiet for another 10 minutes, it moves to Needs you as **Stopped**, with the agent's last message, a reply box, and **Put on hold**.
+
+**On Hold** is a status for work that waits on someone else. On Hold tasks never show as Stopped.
+
+### Paseo Playbooks
+
+If the [Playbooks](https://paseo.sh/plugins/lerenn/playbooks) plugin is installed, a task whose attached agent manages a run, or whose key is one of a run's inputs, shows the run's current step and progress on its card, and a **View progress** link to the run's graph in the task view. Tasks reads Playbooks' run files and never changes them; without Playbooks, nothing changes.
+
 ### Task cards in replies
 
 An agent that writes `::task{key="ABC-12"}` on its own line gets a live task card in place of that line. Clicking the card opens the task.
@@ -121,7 +137,7 @@ A comment sent with **Notify agent** is delivered to the agent that last replied
 | Surface | Where |
 | --- | --- |
 | Tasks screen | Sidebar item, `/tasks [TASK-KEY]`, command center |
-| Needs you | Tasks screen navigation; across projects, grouped by reason: an agent waiting for approval, an agent that failed, In review, and ideas agents proposed |
+| Needs you | Tasks screen navigation; across projects, grouped by reason: an agent waiting for approval, an agent that failed, work that stopped, In review, and ideas agents proposed |
 | Workspace board panel | Workspace and explorer panels, command center |
 | Agent task inspector | Agent panel, `/task-panel`, composer pill on a linked session |
 | Composer pill | Beside the composer for each agent; shows the linked task key, or on a session with no task opens a picker to create a task from it or attach it to one |

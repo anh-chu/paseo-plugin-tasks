@@ -30,7 +30,7 @@ function client(): PluginClientContext {
   return adoptClient;
 }
 
-const OPEN_STATUSES: TaskStatus[] = ["backlog", "todo", "in_progress", "in_review"];
+const OPEN_STATUSES: TaskStatus[] = ["backlog", "todo", "in_progress", "on_hold", "in_review"];
 
 // Creates a task for an existing session and attaches the session to it.
 export async function adoptSession(input: {

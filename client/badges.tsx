@@ -10,7 +10,7 @@ import {
   type TaskStatus,
   type TaskThreadLiveStatus,
 } from "../shared/constants";
-import type { Task } from "../shared/contract";
+import type { PlaybookStage, Task } from "../shared/contract";
 import { agentExcerpt } from "./board-logic";
 
 export function statusIconName(status: TaskStatus): string {
@@ -21,6 +21,8 @@ export function statusIconName(status: TaskStatus): string {
       return "Circle";
     case "in_progress":
       return "Clock";
+    case "on_hold":
+      return "PauseCircle";
     case "in_review":
       return "Eye";
     case "done":
@@ -38,6 +40,8 @@ export function statusColor(status: TaskStatus, theme: PluginTheme): string {
       return theme.colors.foreground;
     case "in_progress":
       return "#f59e0b";
+    case "on_hold":
+      return theme.colors.foregroundMuted;
     case "in_review":
       return "#3b82f6";
     case "done":
@@ -376,6 +380,27 @@ export function AgentLine({ task, theme }: { task: Task; theme: PluginTheme }) {
           · {formatRelativeTime(task.agentAt)}
         </Text>
       ) : null}
+    </View>
+  );
+}
+
+// Where a task's Playbooks run is, read from Playbooks. Hidden without a run.
+export function PlaybookStageLine({ stage, theme }: { stage?: PlaybookStage; theme: PluginTheme }) {
+  if (!stage) return null;
+  const text = stage.step
+    ? `${stage.waiting ? "Waiting at " : ""}${stage.step} · ${stage.done}/${stage.total}`
+    : stage.status === "completed"
+      ? `${stage.playbookTitle} · done`
+      : `${stage.playbookTitle} · ${stage.status}`;
+  return (
+    <View
+      accessibilityLabel={`Playbook stage: ${text}`}
+      style={{ flexDirection: "row", alignItems: "center", gap: 6, minWidth: 0 }}
+    >
+      <Icon name="Workflow" size={11} color={stage.waiting ? theme.colors.statusWarning : theme.colors.foregroundMuted} />
+      <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11, flexShrink: 1 }}>
+        {text}
+      </Text>
     </View>
   );
 }

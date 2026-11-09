@@ -33,6 +33,7 @@ import {
   listLabelsRpc,
   listProjectsRpc,
   listTasksRpc,
+  playbookStagesRpc,
   seedDemoRpc,
   sidebarOpenTaskCountRpc,
   sidebarSummaryRpc,
@@ -44,6 +45,7 @@ import {
 import { tasksSettings } from "../shared/settings";
 import {
   AgentLine,
+  PlaybookStageLine,
   LabelPill,
   PriorityBadge,
   PriorityIcon,
@@ -251,6 +253,15 @@ function TasksBoardAndListShell({
       ? [...listed].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       : listed;
   }, [needsYou, tasksQuery.data]);
+  const playbookStages = useRpc(playbookStagesRpc);
+  const taskIdsKey = tasks.map((t) => t.id).join(",");
+  const stagesQuery = useQuery({
+    queryKey: ["tasks", "playbookStages", taskIdsKey],
+    queryFn: () => playbookStages({ taskIds: tasks.map((t) => t.id) }),
+    enabled: tasks.length > 0,
+    refetchInterval: 5000,
+  });
+  const stageByTask = stagesQuery.data?.stages ?? {};
   const labelById = allLabelsQuery.data ?? new Map<string, Label>();
   const projectById = useMemo(
     () => new Map(projects.map((p) => [p.id, p])),
@@ -286,6 +297,7 @@ function TasksBoardAndListShell({
       return (
         [
           "in_progress",
+          "on_hold",
           "in_review",
           "todo",
           "backlog",
@@ -308,6 +320,7 @@ function TasksBoardAndListShell({
       [
         { key: "waiting", status: "in_progress", label: "Waiting for approval" },
         { key: "failed", status: "canceled", label: "Agent failed" },
+        { key: "stopped", status: "in_progress", label: "Stopped" },
         { key: "review", status: "in_review", label: "In review" },
         { key: "idea", status: "backlog", label: "Ideas" },
       ] as const
@@ -1967,6 +1980,7 @@ function TasksBoardAndListShell({
                                     </Text>
 
                                     <AgentLine task={task} theme={theme} />
+                                    <PlaybookStageLine stage={stageByTask[task.id]} theme={theme} />
 
                                     {taskLabels.length > 0 || task.dueDate ? (
                                       <View
@@ -2196,6 +2210,7 @@ function TasksBoardAndListShell({
                                         {task.title}
                                       </Text>
                                       <AgentLine task={task} theme={theme} />
+                                      <PlaybookStageLine stage={stageByTask[task.id]} theme={theme} />
                                     </View>
                                     <View
                                       style={{

@@ -348,6 +348,35 @@ describe("paseo-plugin-tasks", () => {
     );
   });
 
+  it("starts a task that enters Todo when its project has an auto-start preset, and only then", async () => {
+    const preset = domain.listPresets().presets[0]!;
+    const project = domain.createProject({ name: "Auto", prefix: "AUTO", color: "blue", linkedBbProjectId: "prj_demo123" }).project;
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    const before = createdAgents.length;
+    const quiet = domain.createTask({ projectId: project.id, title: "Not yet", status: "todo", priority: "none" });
+    await flush();
+    expect(createdAgents.length).toBe(before);
+
+    store.tasks.updateProject(project.id, { autoStartPresetId: preset.id });
+    const backlog = domain.createTask({ projectId: project.id, title: "Later", status: "backlog", priority: "none" });
+    await flush();
+    expect(createdAgents.length).toBe(before);
+
+    if (!backlog.ok || !quiet.ok) throw new Error("task creation failed");
+    domain.boardMove({ taskId: backlog.task.id, status: "todo" });
+    await flush();
+    expect(createdAgents.length).toBe(before + 1);
+    expect(store.tasks.getTask(backlog.task.id)?.status).toBe("in_progress");
+
+    // Moving within Todo, or into Todo with an agent already working, starts nothing.
+    store.tasks.upsertTaskThread({ taskId: quiet.task.id, threadId: "agent-busy", presetName: "Manual", title: "Busy", liveStatus: "working" });
+    domain.updateTask({ taskId: quiet.task.id, status: "backlog" });
+    domain.updateTask({ taskId: quiet.task.id, status: "todo" });
+    await flush();
+    expect(createdAgents.length).toBe(before + 1);
+  });
+
   it("tells a delegated agent about sessions already attached to the task", async () => {
     const prod = domain.createProject({
       name: "Product",

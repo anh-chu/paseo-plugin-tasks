@@ -34,6 +34,8 @@ export interface Project {
   folderId: string | null;
   linkedBbProjectId: string | null;
   stages: string[];
+  // Moving a task into Todo delegates it with this preset; null turns it off.
+  autoStartPresetId: string | null;
   createdAt: string;
 }
 
@@ -54,7 +56,7 @@ export interface Task {
   // Paseo project of the session that proposed it from an unlinked folder.
   sourceBbProjectId: string | null;
   // Set while an agent on the open task waits for approval or has failed.
-  attention: "waiting" | "failed" | null;
+  attention: "waiting" | "failed" | "stopped" | null;
   // Most urgent state across attached agent threads; null without threads.
   agentStatus: "waiting" | "failed" | "working" | "idle" | "completed" | null;
   // Latest agent comment (first 300 characters) and when the agent last spoke.
@@ -162,6 +164,7 @@ export interface UpdateProjectInput {
   folderId?: string | null;
   linkedBbProjectId?: string | null;
   stages?: readonly string[];
+  autoStartPresetId?: string | null;
 }
 
 export interface CreateTaskInput {

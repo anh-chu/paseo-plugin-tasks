@@ -1,8 +1,10 @@
 Tasks is a local task tracker inside Paseo: projects, folders, subtasks, labels, comments, and file attachments, shown as a kanban board and a grouped list. You can hand a task to a coding agent in one click, and the agent reports progress back to the same task.
 
-The board is the working surface. Drag a card between columns or within one, or use its status menu, to change status and order. Type a title at the top of a column to add a task there. Each card shows what its agents last said and when. Filter by project, label, priority, or text, and sort by manual position, priority, or due date. Opening a task shows its description, status, priority, labels, due date, sub-tasks, attachments, comments, and the agent sessions attached to it. A column collapses to a narrow strip when you click its title. **Needs you** lists every task in review across all projects.
+The board is the working surface. Drag a card between columns or within one, or use its status menu, to change status and order. Type a title at the top of a column to add a task there. Each card shows what its agents last said and when. Filter by project, label, priority, or text, and sort by manual position, priority, or due date. Opening a task shows its description, status, priority, labels, due date, sub-tasks, attachments, comments, and the agent sessions attached to it. A column collapses to a narrow strip when you click its title. **Needs you** lists every task that needs a person across all projects: in review, waiting on an answer, stopped, failed, or a proposed idea.
 
 Sessions you started without a task can join the tracker later. The **Task** pill beside the composer of a session with no task opens a picker: create a task from the session, with its title filled in, or attach the session to an open task. On a project linked to a Paseo project, the board starts with a collapsed **Sessions without a task** column listing that project's live sessions that no task has adopted. Expand it to create a task for one session, attach a session to a task, or create a task for each.
+
+When an agent attached to a task asks a question or a permission, the task shows it at the top under **Waiting on you**: pick an option, add a comment and send, or allow and deny, without opening the agent's chat. A task in progress whose agents have all gone quiet for 10 minutes gets one message asking its agent to report or continue; if it stays quiet, it moves to **Needs you** as **Stopped**, with the agent's last message, a reply box and **Put on hold**. **On Hold** is a status for work that waits on someone else.
 
 A project can also define its own stages, such as Investigate, Spec, Build and Review. Stages are optional and off until a project lists them. Status still says who has the work; the stage says where the work is. The board can then group by stage instead of status, the task view gets a stage picker, and every stage change is recorded as a comment.
 
@@ -23,6 +25,10 @@ Comment steering closes the loop the other way. Writing a comment with **Notify 
 
 Agent sessions are tracked through Paseo's lifecycle events. When a session starts, finishes a turn, fails, or closes, the task records the new state; a terminal state also leaves a comment on the task. When the plugin loads, it refreshes sessions still shown as running, so events missed during a daemon restart do not leave a stale state.
 
+The dispatch box can also send the preset to a live session already attached to the task, which keeps its own context, instead of starting a new agent. A project can start work on its own: with **Start tasks moved to Todo with** set to a preset, a task moved into Todo is dispatched with it.
+
+If the Playbooks plugin is installed, a task whose agent manages a playbook run shows the run's current step and progress on its card, with a link to the run's graph. Tasks only reads the run.
+
 A preset can schedule a check-in: every hour, weekdays at 9:00, or every day at 9:00. Dispatching with that preset gives the new agent a recurring check-in message, which is removed when the task is done or canceled, or the session is detached or archived. This suits a lead agent that works through a parent task's sub-tasks over several days.
 
 ## Setup
@@ -42,6 +48,8 @@ Dispatching into a new worktree needs a git-backed Paseo project. Runs that need
 - **Reads**: the Paseo project list, project root paths, agent lifecycle events, and workspace creation. The plugin writes nothing to a workspace until you dispatch a task into a new worktree.
 - **Agents**: when you dispatch a task or send a comment with **Notify agent**, the task text, sub-tasks, comments, and any attachment content the agent reads go to that agent's model provider and follow that provider's data policy.
 - **Check-ins**: a preset with a check-in runs `paseo heartbeat create` for the new agent when you dispatch, and `paseo heartbeat delete` when the check-in ends. If the command fails, dispatch still succeeds and the task gets a comment saying so.
+- **Playbooks runs**: when `$PASEO_HOME/plugin-data/paseo-playbooks/runs/` exists, the plugin reads its run files to show a task's playbook stage. It never writes there.
+- **Stopped check**: once a minute the plugin lists agents to find in-progress tasks that went quiet, and may send one nudge message to a quiet task's agent.
 - **GitHub CLI**: when `gh` is available, the plugin runs `gh pr view` in a workspace directory to show pull request state for sessions attached to a task. No other network requests are made.
 
 ## Limits
