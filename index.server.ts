@@ -136,7 +136,10 @@ export default function contribute(server: PluginServerContext) {
       }
     }
 
-    if (values.autoInjectCliAndMcp && activeBridge) {
+    // An explicit empty mcpServers means the caller wants a tool-free agent (e.g. Overseer's helpers).
+    // Adding one forces a dedicated OpenCode server, which the shared OpenCode service rejects.
+    const callerWantsNoMcp = nextConfig.mcpServers !== undefined && Object.keys(nextConfig.mcpServers).length === 0;
+    if (values.autoInjectCliAndMcp && activeBridge && !callerWantsNoMcp) {
       nextConfig.mcpServers = {
         ...nextConfig.mcpServers,
         tasks: {
